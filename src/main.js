@@ -3,10 +3,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import gsap from 'gsap';
 import { ending } from './content.js';
 import { buildParts, offsets, spinOf, rotorTest } from './parts.js';
+import { creasedNormals } from './crease.js';
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -207,7 +207,7 @@ loader.load('models/rebot.glb', (gltf) => {
     let geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(f, 3));
     if (src.index) geo.setIndex(Array.from(src.index.array));
-    geo = toCreasedNormals(geo, 0.6);
+    geo = creasedNormals(geo, 0.6);
     const test = rotorTest(mesh.name.replace(/#\d+$/, ''));
     if (test) { const [rot, mount] = splitGeo(geo, test); addPart(mesh.name, rot, 'rotor'); addPart(mesh.name, mount, 'mount'); }
     else addPart(mesh.name, geo);
