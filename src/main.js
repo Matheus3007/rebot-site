@@ -2,16 +2,22 @@ import './style.css';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import gsap from 'gsap';
 import { ending } from './content.js';
 import { buildParts, offsets, spinOf, rotorTest } from './parts.js';
 import { creasedNormals } from './crease.js';
+import { AGX_GLSL } from './agx.js';
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-// ?capture=1: for headless checks (software WebGL). No render loop, pixel ratio 1, no antialias;
-// window.__step(n, dt, draw) advances the sim by n fixed steps and renders the last one.
-const CAPTURE = new URLSearchParams(location.search).has('capture');
+// ?capture=1: for headless checks (software WebGL). No render loop, pixel ratio 1, no antialias, no AO/grain
+// (add &fx=1 to keep them); window.__step(n, dt, draw) advances the sim by n fixed steps and renders the last one.
+const Q = new URLSearchParams(location.search);
+const CAPTURE = Q.has('capture');
+const FX = !CAPTURE || Q.has('fx');
 
 // ending copy
 document.getElementById('tag-h').textContent = ending.headline;
@@ -22,15 +28,45 @@ const canvas = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: !CAPTURE, alpha: false, powerPreference: 'high-performance' });
 const mobile = () => innerWidth < 820;
 renderer.setPixelRatio(CAPTURE ? 1 : Math.min(devicePixelRatio, mobile() ? 1.5 : 2));
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
-renderer.setClearColor(0x07080a, 1);
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.toneMappingExposure = CAPTURE && Q.has('exp') ? +Q.get('exp') : 1.5; // &exp= overrides it in capture mode, for tuning
+const BG = 0x07080a;
+renderer.setClearColor(BG, 1);
+// shared by the final post pass and the grid: exposure, and the backdrop in linear and display sRGB
+const bgDisplay = new THREE.Color(BG).convertLinearToSRGB();
+const TONE = {
+  uExposure: { value: renderer.toneMappingExposure },
+  uBgLin: { value: new THREE.Vector3(...new THREE.Color(BG).toArray()) },
+  uBgD: { value: new THREE.Vector3(bgDisplay.r, bgDisplay.g, bgDisplay.b) },
+};
 
 const scene = new THREE.Scene();
+// as scene.background (not only the clear colour) three converts it per target; the composer's RenderPass
+// clear would otherwise use the colour already encoded for the screen and double-encode it
+const bgColor = new THREE.Color(BG);
+scene.background = bgColor;
 scene.fog = new THREE.Fog(0x07080a, 1.6, 3.4);
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-scene.environmentIntensity = 0.42;
+scene.environment = pmrem.fromScene(darkStudio(), 0.03).texture;
+scene.environmentIntensity = 0.3;
+
+// Reflection environment: a near-black room with a few hard-edged softboxes, so reflections are contrasty
+// (bright edges, dark faces) instead of the even grey of a lit room.
+function darkStudio() {
+  const env = new THREE.Scene();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(6, 6, 6), new THREE.MeshBasicMaterial({ color: 0x0a0b0d, side: THREE.BackSide }));
+  env.add(box);
+  const panel = (w, h, k, color, pos) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k), side: THREE.DoubleSide }));
+    m.position.set(...pos); m.lookAt(0, 0, 0); env.add(m);
+  };
+  panel(2.2, 1.0, 9, 0xffffff, [-1.2, 2.4, 1.4]);  // key softbox, above front-left
+  panel(0.35, 2.4, 6, 0xdfe6ff, [2.6, 0.8, -1.2]); // cool strip, back right
+  panel(0.25, 1.8, 3, 0xffffff, [-2.7, 0.3, -1.6]); // thin back-left strip
+  panel(3.0, 0.2, 2, 0xffffff, [0, -0.4, 2.8]);   // low front edge light
+  panel(2.6, 1.4, 4, 0xffffff, [0.2, 2.6, -1.3]);  // overhead, behind: the sheen on flat carbon tops
+  return env;
+}
 
 const FOV = 30;
 const camera = new THREE.PerspectiveCamera(FOV, 1, 0.05, 20);
@@ -40,7 +76,8 @@ const DIST = camera.position.length();
 const halfH = DIST * Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 
 const key = new THREE.DirectionalLight(0xffffff, 2.6); key.position.set(-0.6, 1.2, 0.9); scene.add(key);
-const rimR = new THREE.DirectionalLight(0xff2a30, 3.2); rimR.position.set(0.9, 0.5, -0.8); scene.add(rimR);
+// red rim kept low and grazing: on rough surfaces a higher one mirrors off the flat tops toward the camera
+const rimR = new THREE.DirectionalLight(0xff2a30, 2.6); rimR.position.set(0.9, 0.18, -0.8); scene.add(rimR);
 const rimW = new THREE.DirectionalLight(0xbcd0ff, 1.4); rimW.position.set(-1, 0.3, -0.7); scene.add(rimW);
 const fill = new THREE.DirectionalLight(0xffffff, 0.6); fill.position.set(0.8, -0.2, 1.0); scene.add(fill);
 
@@ -51,12 +88,17 @@ model.rotation.x = -Math.PI / 2;
 root.add(model); scene.add(root);
 
 // ---------------------------------------------------------------- ground
+// The grid authors display colours. Under the post chain it writes the inverse of the final pass instead
+// (opaque, already blended over the backdrop), so it lands on exactly the same colours as a direct render.
 const groundMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false,
-  uniforms: { uOff: { value: new THREE.Vector2() }, uFade: { value: 1 }, uC: { value: new THREE.Vector2() } },
+  defines: FX ? { AGX_INV: '' } : {},
+  uniforms: { uOff: { value: new THREE.Vector2() }, uFade: { value: 1 }, uC: { value: new THREE.Vector2() }, ...TONE },
   vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
   fragmentShader: `
     varying vec3 vW; uniform vec2 uOff; uniform float uFade; uniform vec2 uC;
+    uniform float uExposure; uniform vec3 uBgLin, uBgD;
+    ${AGX_GLSL}
     float grid(vec2 p, float s, float w){ vec2 q = p / s; vec2 d = abs(fract(q - .5) - .5) / fwidth(q); return 1. - min(min(d.x, d.y) / w, 1.); }
     void main(){
       vec2 p = vW.xz - uOff;
@@ -65,7 +107,12 @@ const groundMat = new THREE.ShaderMaterial({
       float fade = smoothstep(1.15, .15, r) * uFade;
       float a = clamp(minor * .07 + major * .42, 0., 1.);
       vec3 col = mix(vec3(.9), vec3(.9,.08,.1), major * .42 / max(a, 1e-3));
+    #ifdef AGX_INV
+      vec3 d = mix(uBgD, col, a * fade);
+      gl_FragColor = vec4(agxDisplayInv(blackRemapInv(d, agxDisplay(uBgLin, uExposure), uBgD), uExposure), 1.);
+    #else
       gl_FragColor = vec4(col, a * fade);
+    #endif
     }`,
 });
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(7, 7), groundMat);
@@ -117,22 +164,23 @@ function makeCarbon() {
   return t;
 }
 const carbonTex = makeCarbon();
+// Gritty, worn look: only roughness/metalness differ from a clean render; the base colours are the brand palette.
 const M = {
-  carbon: () => new THREE.MeshStandardMaterial({ color: 0xffffff, map: carbonTex, bumpMap: carbonTex, bumpScale: 1.2, metalness: 0.35, roughness: 0.38 }),
-  body: () => new THREE.MeshStandardMaterial({ color: 0x5a5e65, roughness: 0.62, metalness: 0.0 }),
-  tpu: () => new THREE.MeshStandardMaterial({ color: 0xc3141c, roughness: 0.5, metalness: 0.0 }),
-  tpu2: () => new THREE.MeshStandardMaterial({ color: 0xe5161c, roughness: 0.42, metalness: 0.0 }),
-  rubber: () => new THREE.MeshStandardMaterial({ color: 0xa8121a, roughness: 0.85, metalness: 0 }),
-  rim: () => new THREE.MeshStandardMaterial({ color: 0xd3161e, roughness: 0.4, metalness: 0.1 }),
-  alu: () => new THREE.MeshStandardMaterial({ color: 0xc9ced6, roughness: 0.28, metalness: 1.0 }),
-  steel: () => new THREE.MeshStandardMaterial({ color: 0x8b9099, roughness: 0.32, metalness: 1.0 }),
-  hardox: () => new THREE.MeshStandardMaterial({ color: 0x6d737c, roughness: 0.36, metalness: 1.0 }),
-  chrome: () => new THREE.MeshStandardMaterial({ color: 0xe3e6ea, roughness: 0.14, metalness: 1.0 }),
-  anod: () => new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.34, metalness: 0.9 }),
-  motor: () => new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.3, metalness: 0.9 }),
-  vyta: () => new THREE.MeshStandardMaterial({ color: 0xf2efe8, roughness: 0.62, metalness: 0 }),
-  elec: () => new THREE.MeshStandardMaterial({ color: 0x1b1e22, roughness: 0.6, metalness: 0.2 }),
-  batt: () => new THREE.MeshStandardMaterial({ color: 0x22252a, roughness: 0.7, metalness: 0.05 }),
+  carbon: () => new THREE.MeshStandardMaterial({ color: 0xffffff, map: carbonTex, bumpMap: carbonTex, bumpScale: 1.2, metalness: 0.2, roughness: 0.55 }), // semi-matte weave
+  body: () => new THREE.MeshStandardMaterial({ color: 0x5a5e65, roughness: 0.88, metalness: 0.0 }), // TPU unibody: very matte
+  tpu: () => new THREE.MeshStandardMaterial({ color: 0xc3141c, roughness: 0.88, metalness: 0.0 }),
+  tpu2: () => new THREE.MeshStandardMaterial({ color: 0xe5161c, roughness: 0.85, metalness: 0.0 }),
+  rubber: () => new THREE.MeshStandardMaterial({ color: 0xa8121a, roughness: 0.93, metalness: 0 }),
+  rim: () => new THREE.MeshStandardMaterial({ color: 0xd3161e, roughness: 0.7, metalness: 0.05 }),
+  alu: () => new THREE.MeshStandardMaterial({ color: 0xc9ced6, roughness: 0.55, metalness: 1.0 }), // dull bare aluminium
+  steel: () => new THREE.MeshStandardMaterial({ color: 0x8b9099, roughness: 0.5, metalness: 1.0 }),
+  hardox: () => new THREE.MeshStandardMaterial({ color: 0x6d737c, roughness: 0.6, metalness: 0.9 }), // dull ground steel, not chrome
+  chrome: () => new THREE.MeshStandardMaterial({ color: 0xe3e6ea, roughness: 0.28, metalness: 1.0 }),
+  anod: () => new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.5, metalness: 0.85 }),
+  motor: () => new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.45, metalness: 0.85 }),
+  vyta: () => new THREE.MeshStandardMaterial({ color: 0xf2efe8, roughness: 0.82, metalness: 0 }),
+  elec: () => new THREE.MeshStandardMaterial({ color: 0x1b1e22, roughness: 0.75, metalness: 0.15 }),
+  batt: () => new THREE.MeshStandardMaterial({ color: 0x22252a, roughness: 0.8, metalness: 0.05 }),
 };
 
 // planar/box UVs for the carbon weave (the CAD export has none)
@@ -346,14 +394,64 @@ function frame(now, draw = true) {
   ground.visible = S.g > 0.01;
   blob.material.opacity = S.show.all * (1 - S.gf); blob.visible = blob.material.opacity > 0.01;
 
-  if (draw) renderer.render(scene, camera);
+  if (!draw) return;
+  if (composer) { grain.uniforms.uTime.value += dt * run; composer.render(dt); } // reduced motion: static grain
+  else renderer.render(scene, camera);
+}
+
+// ---------------------------------------------------------------- post: AO, AgX + grain (the vignette is CSS)
+// GTAO darkens seams, gaps and bolt heads. It runs at reduced resolution (less on phones) and ignores parts
+// that are fading out, so they don't leave dark ghosts on what stays.
+// Final pass: AgX with the Punchy look (src/agx.js), the backdrop black mapped back onto the brand black, and
+// a fine animated grain, kept lighter on the black backdrop.
+const FinalShader = {
+  uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAmt: { value: 0.035 }, ...TONE },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAmt; uniform float uExposure; uniform vec3 uBgLin, uBgD; varying vec2 vUv;
+    ${AGX_GLSL}
+    float h(vec2 p){ p = fract(p * vec2(443.897, 441.423)); p += dot(p, p.yx + 19.19); return fract((p.x + p.y) * p.x); }
+    void main(){
+      vec3 c = blackRemap(agxDisplay(texture2D(tDiffuse, vUv).rgb, uExposure), agxDisplay(uBgLin, uExposure), uBgD);
+      float l = dot(c, vec3(.2126, .7152, .0722));
+      float n = h(gl_FragCoord.xy + fract(uTime * 7.13) * 917.) - .5;
+      c += n * uAmt * mix(.25, 1., smoothstep(.0, .3, l));
+      gl_FragColor = vec4(c, 1.);
+    }`,
+};
+let composer = null, gtao = null, grain = null;
+if (CAPTURE) window.__fx = () => ({ composer, gtao, grain });
+const AO_RES = () => (mobile() ? 0.5 : 0.75);
+if (FX) {
+  const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: mobile() ? 2 : 4 });
+  composer = new EffectComposer(renderer, rt);
+  composer.addPass(new RenderPass(scene, camera));
+  gtao = new GTAOPass(scene, camera, 1, 1);
+  gtao.updateGtaoMaterial({ radius: 0.035, distanceExponent: 1.4, thickness: 0.02, distanceFallOff: 1, scale: 1.3, samples: mobile() ? 8 : 16 });
+  gtao.updatePdMaterial({ samples: mobile() ? 8 : 16, radius: 6 });
+  gtao.blendIntensity = 1;
+  const setAO = gtao.setSize.bind(gtao);
+  gtao.setSize = (w, h) => setAO(Math.max(1, Math.round(w * AO_RES())), Math.max(1, Math.round(h * AO_RES())));
+  const hide = gtao.overrideVisibility.bind(gtao);
+  const show = gtao.restoreVisibility.bind(gtao);
+  gtao.overrideVisibility = () => { hide(); scene.background = null; scene.traverse((o) => { if (o.isMesh && o.material.depthWrite === false) o.visible = false; }); };
+  gtao.restoreVisibility = () => { show(); scene.background = bgColor; };
+  composer.addPass(gtao);
+  grain = new ShaderPass(FinalShader);
+  grain.material.toneMapped = false; // it does its own tone mapping; keep three's out of the screen pass
+  composer.addPass(grain);
 }
 
 function resize() {
   const w = innerWidth, h = innerHeight;
-  renderer.setPixelRatio(CAPTURE ? 1 : Math.min(devicePixelRatio, mobile() ? 1.5 : 2));
+  const pr = CAPTURE ? 1 : Math.min(devicePixelRatio, mobile() ? 1.5 : 2);
+  renderer.setPixelRatio(pr);
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
+  if (composer) {
+    composer.setPixelRatio(pr); composer.setSize(w, h);
+    grain.uniforms.uAmt.value = mobile() ? 0.025 : 0.035;
+  }
 }
 addEventListener('resize', resize);
 resize();

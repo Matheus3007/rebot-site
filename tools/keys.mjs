@@ -5,6 +5,7 @@ const b = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftsha
 for (const sz of sizes.split(',')) {
   const [w, h] = sz.split('x').map(Number);
   const p = await b.newPage({ viewport: { width: w, height: h } });
+  p.on('pageerror', (e) => console.log('pageerror', e.message)); p.on('console', (m) => m.type() === 'error' && console.log('console error', m.text()));
   await p.goto(url, { waitUntil: 'networkidle' });
   await p.waitForFunction(() => window.__step, null, { timeout: 60000 });
   for (const n of pages.split(',').map(Number)) {
