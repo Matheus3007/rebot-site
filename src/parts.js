@@ -73,7 +73,7 @@ export function offsets(p) {
   // the side armour and the axle bolt come off. Everything else spreads out and fades.
   let r;
   if (has(b, 'invertediFlight', 'SimpleWheelHub', 'RubberWheel', '6xDriveSupport', 'DriveBearing')) r = [0, 0, 0];
-  else if (has(b, 'WheelProtection', 'MirrorWheelProtection')) r = [-6, s * 58, 16];
+  else if (has(b, 'WheelProtection', 'MirrorWheelProtection')) r = [0, s * 58, 0]; // straight out along the axle: holes stay in line
   else if (has(b, 'socket_head')) r = [0, s * 128, 0];
   else if (has(b, 'DriveNut')) r = ay < 105 ? [0, s * -34, 0] : [0, 0, 0];
   else r = [(c.x - C[0]) * 0.9, c.y * 0.7, (c.z - C[2]) * 1.6 + 30];
@@ -98,6 +98,6 @@ export function offsets(p) {
   let sz = 0; for (const k in SZ) if (b.startsWith(k)) sz = SZ[k];
   let sv = [0, 0, sz];
   if (has(b, '6xDriveSupport')) sv = [0, s * 26, 0];
-  if (has(b, 'WheelProtection', 'MirrorWheelProtection')) sv = [0, s * 44, 0];
+  if (has(b, 'WheelProtection', 'MirrorWheelProtection')) sv = [0, s * 30, 0];
   return { r, v, s: sv };
 }

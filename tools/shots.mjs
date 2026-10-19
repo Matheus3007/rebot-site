@@ -1,10 +1,10 @@
-// Headless screenshots of each scroll stop: node tools/shots.mjs [url] [outdir] [vh,vh,...]
+// Headless screenshots of each page: node tools/shots.mjs [url] [outdir] [page,page,...]
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 
-const url = process.argv[2] || 'http://localhost:5173/?still';
+const url = process.argv[2] || 'http://localhost:5173/';
 const out = process.argv[3] || 'shots';
-const stops = (process.argv[4] || '0,160,300,420,560,700,860,980,1140').split(',').map(Number);
+const stops = (process.argv[4] || '0,1,2,3,4').split(',').map(Number);
 fs.mkdirSync(out, { recursive: true });
 
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
@@ -19,9 +19,9 @@ for (const [tag, vp] of [['desk', { width: 1440, height: 900 }], ['phone', { wid
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.getElementById('loader').classList.contains('done'), null, { timeout: 60000 });
   for (const vh of stops) {
-    await page.evaluate((vh) => window.scrollTo(0, vh * innerHeight / 100), vh);
+    await page.evaluate((n) => window.__goto(n, true), vh);
     await page.waitForTimeout(1400);
-    await page.screenshot({ path: `${out}/${tag}-${String(vh).padStart(4, '0')}.png` });
+    await page.screenshot({ path: `${out}/${tag}-p${vh}.png` });
   }
   console.log(tag, JSON.stringify(types), '\n' + logs.join('\n'));
   await page.close();

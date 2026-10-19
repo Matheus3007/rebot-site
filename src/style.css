@@ -9,9 +9,9 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html { background: var(--bg); scrollbar-width: none; }
-html::-webkit-scrollbar { display: none; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+html { background: var(--bg); }
+body { cursor: default; user-select: none; -webkit-user-select: none; touch-action: none; margin: 0; background: var(--bg); color: var(--text); font: 17px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
 ::selection { background: var(--red); color: #fff; }
 #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; z-index: 0; }
 .vignette { position: fixed; inset: 0; z-index: 1; pointer-events: none;
@@ -57,7 +57,6 @@ h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
 .lb { width: 160px; height: 2px; background: var(--line); }
 .lb i { display: block; height: 100%; width: 0; background: var(--red); transition: width .2s; }
 
-#scroll { position: relative; z-index: 2; pointer-events: none; }
 
 @media (max-width: 820px) {
   .rail a span { display: none; }

@@ -5,16 +5,10 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import Lenis from 'lenis';
 import { ending } from './content.js';
 import { buildParts, offsets, spinOf, rotorTest } from './parts.js';
 
-gsap.registerPlugin(ScrollTrigger);
-
-const qs = new URLSearchParams(location.search);
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const STILL = qs.has('still'); // no scroll smoothing (used for screenshots)
 
 // ending copy
 document.getElementById('tag-h').textContent = ending.headline;
@@ -85,7 +79,7 @@ const GROUND_Z = -0.0166; // wheel bottom in CAD z (m)
 const blob = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.42), new THREE.MeshBasicMaterial({ map: blobTex, transparent: true, depthWrite: false }));
 blob.position.set(-0.0695, 0, GROUND_Z); blob.renderOrder = -1; model.add(blob);
 
-// ---------------------------------------------------------------- state driven by scroll
+// ---------------------------------------------------------------- state driven by the page timeline
 const BASE_YAW = -Math.PI / 2; // nose toward the camera
 const S = {
   u: 0.42, v: 0, mv: 0.3, scale: 1, yaw: BASE_YAW, // mv: vertical placement on phones (text sits below)
@@ -97,7 +91,7 @@ const S = {
   cyc: 1,        // zig-zag drive-in-place amount
   showSpin: 0,   // 1 = slow showcase wheel/motor spin
   weaponSlow: 0,
-  rot: 0,        // 1 = showcase turntable running (time-based, not scroll-based)
+  rot: 0,        // 1 = showcase turntable running (set by the page logic)
 };
 const FOCUS = {
   robot: [-69.5, 0, 16],
@@ -228,20 +222,70 @@ loader.load('models/rebot.glb', (gltf) => {
 // Never stops: go, turn ~90 deg with a slight drift, go again. Heading is steered by a PD controller
 // (underdamped: a little overshoot = follow-through), speed eases off in the turn but never reaches zero,
 // and the travel direction lags the heading (drift). The body stays flat: a lean would put the blade in the floor.
-const sim = { psi: Math.PI / 4, w: 0, phi: Math.PI / 4, v: 0.36, side: -1, t: 0 };
+const sim = { psi: Math.PI / 4, w: 0, phi: Math.PI / 4, v: 0.36, side: -1, t: 0, hold: false };
 const LEG = 1.9, AMP = Math.PI / 4, VMAX = 0.46, VMIN = 0.24;
+const KP = 70, KD = 10.5, GRIP = 3.2;
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+const lerpAng = (a, b, k) => a + wrap(b - a) * k;
 function simStep(dt) {
   sim.t += dt;
-  if (sim.t > LEG) { sim.t -= LEG; sim.side *= -1; }
+  if (sim.t > LEG && !sim.hold) { sim.t -= LEG; sim.side *= -1; }
   const err = sim.side * AMP - sim.psi;
-  sim.w += (70 * err - 10.5 * sim.w) * dt;
+  sim.w += (KP * err - KD * sim.w) * dt;
   sim.psi += sim.w * dt;
   const vT = VMAX - (VMAX - VMIN) * Math.min(1, Math.abs(sim.w) / 3.5);
   sim.v += (vT - sim.v) * Math.min(1, dt * 4.5);
-  sim.phi += (sim.psi - sim.phi) * Math.min(1, dt * 3.2);
+  sim.phi += (sim.psi - sim.phi) * Math.min(1, dt * GRIP);
 }
 
-// showcase turntable: runs on its own while the copy is up, then settles back to its home angle
+// ---------------------------------------------------------------- procedural drive between landing and drive
+// Same controller, but the robot moves over a still floor instead of the floor moving under it.
+// 'wait': hold the next left zag; 'go': drive to the left mark and brake; 'back': drive to the landing mark
+// and hand back to the sim at speed; 'blend': fade the override into the timeline pose.
+const G = { mode: 'off', x: 0, z: 0, h: 0, w: 0, v: 0, phi: 0, tx: 0, k: 0, gk: 1, t: 0, cb: null };
+const uToX = (u) => u * halfH * (innerWidth / innerHeight);
+function goStep(dt) {
+  if (G.mode === 'wait') {
+    if (Math.abs(sim.psi + AMP) < 0.12 && Math.abs(sim.w) < 1.2) {
+      Object.assign(G, { mode: 'go', x: uToX(0.42), z: 0, h: BASE_YAW + sim.psi, w: sim.w, v: sim.v, phi: BASE_YAW + sim.phi, tx: uToX(-0.4), k: 1, t: 0 });
+    }
+    return;
+  }
+  if (G.mode === 'go' || G.mode === 'back') {
+    G.t += dt;
+    // steer at a carrot on the z=0 line ahead of the robot; brake on the distance left along x
+    const dir = G.mode === 'go' ? -1 : 1;
+    const left = (G.tx - G.x) * dir;
+    const hDes = Math.atan2(G.z, 0.09 * dir);
+    G.w += (KP * wrap(hDes - G.h) - KD * G.w) * dt;
+    G.h += G.w * dt;
+    const vT = G.mode === 'go' ? Math.min(VMAX, Math.sqrt(2 * 1.4 * Math.max(left, 0))) : VMAX;
+    G.v += (vT - G.v) * Math.min(1, dt * 4.5);
+    if (G.mode === 'go') G.v = Math.min(G.v, vT); // braking follows the stopping profile exactly
+    G.phi = lerpAng(G.phi, G.h, Math.min(1, dt * GRIP));
+    G.x += Math.cos(G.phi) * G.v * dt; G.z -= Math.sin(G.phi) * G.v * dt;
+    G.gk = Math.max(0, G.gk - dt * 2.5);
+    const arrived = G.mode === 'go' ? (left < 0.003 || (left < 0.015 && G.v < 0.03)) || G.t > 6 : left <= 0.004 || G.t > 6;
+    if (arrived) {
+      if (G.mode === 'back') {
+        // hand back to the sim at speed: it carries on zig-zagging from the current heading
+        Object.assign(sim, { psi: wrap(G.h - BASE_YAW), phi: wrap(G.phi - BASE_YAW), w: G.w, v: G.v, side: 1, t: 0, hold: false });
+      }
+      G.mode = 'blend';
+      const cb = G.cb; G.cb = null; cb && cb();
+    }
+    return;
+  }
+  if (G.mode === 'blend') {
+    G.v *= Math.exp(-dt / 0.12);
+    G.x += Math.cos(G.phi) * G.v * dt; G.z -= Math.sin(G.phi) * G.v * dt;
+    G.k = Math.max(0, G.k - dt / 0.35);
+    G.gk = Math.min(1, G.gk + dt / 0.35);
+    if (G.k === 0) { G.mode = 'off'; G.gk = 1; }
+  }
+}
+
+// showcase turntable: runs on its own while a drive/structure page is up, then settles back to its home angle
 const turn = { a: 0, w: 0 };
 function turnStep(dt) {
   if (S.rot > 0.5) {
@@ -257,7 +301,7 @@ function turnStep(dt) {
 const clock = { last: 0 };
 const ang = { wl: 0, wr: 0, weap: 0 }; // wheel left/right accum, weapon accum
 const sm = { wl: 0, wr: 0, ww: 0 };
-const prev = { x: 0, yaw: 0, init: false };
+const prev = { x: 0, z: 0, yaw: 0, init: false };
 const gOff = new THREE.Vector2();
 const RW = 0.0325, HALF_TRACK = 0.124, RATIO_DRIVE = 10.53, RATIO_WEAPON = 1.5;
 const AXIS = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
@@ -275,33 +319,37 @@ function layout() {
 function frame(now) {
   const dt = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
   const run = REDUCED ? 0 : 1;
-  if (run) { simStep(dt); turnStep(dt); }
+  if (run) { simStep(dt); turnStep(dt); goStep(dt); }
   const L = layout();
 
+  // timeline pose, then the procedural override on top
   const cyc = S.cyc * run;
-  const yawTot = S.yaw + cyc * sim.psi + turn.a;
+  const yawTl = S.yaw + cyc * sim.psi + turn.a;
+  const yawTot = lerpAng(yawTl, G.h, G.k);
+  const px = THREE.MathUtils.lerp(L.x, G.x, G.k), pz = G.z * G.k;
   root.rotation.y = yawTot;
   root.scale.setScalar(L.sc);
-  root.position.set(L.x, L.y, 0);
+  root.position.set(px, L.y, pz);
   const f = S.focus;
   model.position.set(-f[0] * 0.001, -f[2] * 0.001, f[1] * 0.001);
 
-  // body speed from the rig's own motion (scroll transit) plus the sim
+  // body speed from the rig's own motion plus the sim
   const fx = Math.cos(yawTot), fz = -Math.sin(yawTot);
-  if (!prev.init) { prev.x = L.x; prev.yaw = yawTot; prev.init = true; }
-  const vRig = (L.x - prev.x) * fx / Math.max(dt, 1e-4) / L.sc;
-  const yawRate = (yawTot - prev.yaw) / Math.max(dt, 1e-4);
-  prev.x = L.x; prev.yaw = yawTot;
-  const vBody = vRig + cyc * sim.v;
+  if (!prev.init) { Object.assign(prev, { x: px, z: pz, yaw: yawTot, init: true }); }
+  const vRig = ((px - prev.x) * fx + (pz - prev.z) * fz) / Math.max(dt, 1e-4) / L.sc;
+  const yawRate = wrap(yawTot - prev.yaw) / Math.max(dt, 1e-4);
+  Object.assign(prev, { x: px, z: pz, yaw: yawTot });
+  const vBody = vRig + cyc * sim.v * G.gk;
 
   // the ground slides against the travel direction (which lags the heading: drift)
-  const travel = S.yaw + sim.phi;
-  gOff.x -= Math.cos(travel) * cyc * sim.v * dt; gOff.y += Math.sin(travel) * cyc * sim.v * dt;
+  const travel = S.yaw + sim.phi, gs = cyc * sim.v * G.gk * dt;
+  gOff.x -= Math.cos(travel) * gs; gOff.y += Math.sin(travel) * gs;
   gOff.y += 0.03 * S.gf * dt * run; // slow drift on the floating floor
 
   // wheel rates (rad/s about +Y CAD); right wheel is the CAD -Y side
   const clampR = (x) => Math.max(-40, Math.min(40, x));
-  let wR = clampR((vBody + yawRate * HALF_TRACK * (1 - S.showSpin)) / RW), wL = clampR((vBody - yawRate * HALF_TRACK * (1 - S.showSpin)) / RW);
+  const diff = yawRate * HALF_TRACK * (1 - S.showSpin);
+  let wR = clampR((vBody + diff) / RW), wL = clampR((vBody - diff) / RW);
   wR = THREE.MathUtils.lerp(wR, 1.7, S.showSpin); wL = THREE.MathUtils.lerp(wL, 1.7, S.showSpin);
   sm.wr += (wR - sm.wr) * Math.min(1, dt * 8); sm.wl += (wL - sm.wl) * Math.min(1, dt * 8);
   ang.wr += sm.wr * dt * run; ang.wl += sm.wl * dt * run;
@@ -340,7 +388,7 @@ function frame(now) {
   ground.position.set(0, THREE.MathUtils.lerp(gyWheels, gyFloor, S.gf), 0);
   groundMat.uniforms.uOff.value.copy(gOff);
   groundMat.uniforms.uFade.value = S.g;
-  groundMat.uniforms.uC.value.set(L.x * 0.4, 0);
+  groundMat.uniforms.uC.value.set(px * 0.4, pz * 0.4);
   ground.visible = S.g > 0.01;
   blob.material.opacity = S.show.all * (1 - S.gf); blob.visible = blob.material.opacity > 0.01;
 
@@ -353,23 +401,20 @@ function resize() {
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
-addEventListener('resize', () => { resize(); ScrollTrigger.refresh(); });
+addEventListener('resize', resize);
 resize();
 
-// ---------------------------------------------------------------- timeline (unit = vh of scroll)
-const TOTAL = 1000;
-const MARKS = [0, 60, 385, 675, 915];            // chapter starts (rail highlight)
-const STOPS = { top: 0, s1: 0, s2: 322, s3: 612, s4: 848, s5: 1000 }; // rail targets: each chapter's hold
-let lenis = null;
-const toScroll = (t) => t / TOTAL * (document.documentElement.scrollHeight - innerHeight);
+// ---------------------------------------------------------------- timeline (paused; pages are labels on it)
+const ARRIVE = 150;                         // Rebot parked on the left, before the drive explode
+const PAGES = [0, 300, 600, 840, 1000];     // landing, drive, weapon, structure, ending
+const NAMES = ['rebot', 'drive', 'weapon', 'structure', 'end'];
+const tl = gsap.timeline({ paused: true, defaults: { ease: 'power3.inOut' } });
 
-function timeline() {
-  const tl = gsap.timeline({ defaults: { ease: 'power3.inOut' },
-    scrollTrigger: { trigger: '#scroll', start: 'top top', end: 'bottom bottom', scrub: (STILL || REDUCED) ? true : 0.6 } });
+function buildTimeline() {
   const at = (t, tw, vars) => tl.to(tw, { duration: 1, ...vars }, t);
-  // yaw is kept monotone: next absolute value congruent to `mod` and >= prev
+  // yaw targets take the shortest way round from the previous one
   let yawNow = S.yaw;
-  const yawTo = (mod) => { const y = yawNow; while (mod < y) mod += Math.PI * 2; while (mod - Math.PI * 2 >= y) mod -= Math.PI * 2; yawNow = mod; return yawNow; };
+  const yawTo = (mod) => { yawNow = yawNow + wrap(mod - yawNow); return yawNow; };
   // focus keyframes chained at build time (each tween interpolates from the previous target)
   const FK = [FOCUS.robot];
   const addFocus = (t, d, to, ease = 'power3.inOut') => {
@@ -377,7 +422,6 @@ function timeline() {
     const prox = { k: 0 };
     tl.fromTo(prox, { k: 0 }, { k: 1, duration: d, ease, immediateRender: false, onUpdate() { for (let i = 0; i < 3; i++) S.focus[i] = from[i] + (to[i] - from[i]) * prox.k; } }, t);
   };
-  const state = (t0, t1) => { at(t0, S, { rot: 1, duration: 2, ease: 'none' }); at(t1, S, { rot: 0, duration: 2, ease: 'none' }); };
 
   // isolation groups switch on just before 'all' fades (they only matter while all < 1)
   at(190, S.show, { module: 1, duration: 8 });
@@ -385,21 +429,20 @@ function timeline() {
   at(715, S.show, { weapon: 0, struct: 1, duration: 8 });
   at(950, S.show, { struct: 0, duration: 8 });
 
-  // ---- 01 -> 02: the sim winds down, Rebot turns and drives right to left (anticipation + settle)
-  at(55, S, { cyc: 0, duration: 45, ease: 'power2.inOut' });
-  at(62, S, { u: -0.4, duration: 115, ease: 'back.inOut(1.1)' });
-  at(62, S, { yaw: yawTo(-Math.PI), duration: 50 });
-  at(150, S, { yaw: yawTo(2.45), duration: 60, ease: 'back.out(1.4)' }); // inner side faces the camera: motor on the rim, armour off the far side
-  at(150, S, { gf: 1, g: 0.55, duration: 70 });
-  at(160, S, { showSpin: 1, duration: 50 });
-  // drive explode: armour and axle bolt come off, the tangential pair stays assembled
-  at(175, S, { eR: 1, duration: 75 });
+  // ---- 01 -> arrive. Played only with reduced motion or on phones; otherwise the procedural drive covers it.
+  at(40, S, { cyc: 0, duration: 60, ease: 'power2.inOut' });
+  at(40, S, { u: -0.4, duration: 108, ease: 'power2.inOut' });
+  at(40, S, { yaw: yawTo(-Math.PI), duration: 108 });
+  // ---- arrive -> 02: turn to show the inner side, armour and axle bolt come off, isolate one module
+  at(ARRIVE, S, { yaw: yawTo(2.45), duration: 55, ease: 'back.out(1.4)' });
+  at(ARRIVE, S, { gf: 1, g: 0.55, duration: 65 });
+  at(ARRIVE + 10, S, { showSpin: 1, duration: 50 });
+  at(170, S, { eR: 1, duration: 75 });
   at(200, S.show, { all: 0, duration: 55 });
   addFocus(200, 75, FOCUS.module);
   at(200, S, { scale: 1.65, duration: 75 });
   at(200, S, { u: -0.3, duration: 75 });
-  state(262, 375);
-  // ---- 02 -> 03: reassemble, explode vertically, isolate the weapon
+  // ---- 02 -> 03: reassemble, explode vertically, isolate the weapon (no turntable: the drive does the moving)
   at(385, S.show, { all: 1, duration: 45 });
   addFocus(385, 60, FOCUS.robot);
   at(385, S, { eR: 0, duration: 60 });
@@ -412,7 +455,6 @@ function timeline() {
   addFocus(500, 60, FOCUS.weapon);
   at(500, S, { scale: 1.5, duration: 60 });
   at(500, S, { u: 0.36, duration: 60 });
-  state(555, 665);
   // ---- 03 -> 04: reassemble, structure
   at(675, S.show, { all: 1, duration: 40 });
   addFocus(675, 50, FOCUS.robot);
@@ -425,7 +467,6 @@ function timeline() {
   at(725, S, { scale: 1.12, duration: 60 });
   at(725, S, { yaw: yawTo(-1.15), duration: 60 });
   at(725, S, { mv: 0.04, duration: 60 });
-  state(790, 900);
   // ---- 04 -> 05: back together, zig-zag again
   at(915, S.show, { all: 1, duration: 40 });
   at(915, S, { eS: 0, duration: 50 });
@@ -437,46 +478,121 @@ function timeline() {
   at(915, S, { gf: 0, g: 1, duration: 50 });
   at(940, S, { cyc: 1, duration: 40 });
   at(915, S, { showSpin: 0, weaponSlow: 0, duration: 40 });
-  tl.set({}, {}, TOTAL);
+  tl.set({}, {}, PAGES[4]);
 
-  // ---- copy panels
+  // ---- copy panels (the landing copy is driven by the page logic, since its exit is procedural)
   const mq = matchMedia('(max-width: 820px)');
   const panel = (id, tin, tout, last = false) => {
     const el = document.getElementById(id);
-    gsap.set(el, { yPercent: mq.matches ? 0 : -50, y: id === 'p1' ? 0 : 36, opacity: id === 'p1' ? 1 : 0 });
-    if (id !== 'p1') tl.fromTo(el, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 24, ease: 'power2.out', immediateRender: false }, tin);
+    gsap.set(el, { yPercent: mq.matches ? 0 : -50, y: 36, opacity: 0 });
+    tl.fromTo(el, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 24, ease: 'power2.out', immediateRender: false }, tin);
     if (!last) tl.to(el, { opacity: 0, y: -30, duration: 22, ease: 'power2.in' }, tout);
   };
-  panel('p1', 0, 45);
+  gsap.set('#p1', { yPercent: mq.matches ? 0 : -50 });
   panel('p2', 255, 372);
   panel('p3', 545, 662);
   panel('p4a', 772, 895);
   panel('p4b', 788, 895);
   panel('p5', 960, 0, true);
+}
 
-  // rail state
-  const links = [...document.querySelectorAll('.rail a')];
-  ScrollTrigger.create({ trigger: '#scroll', start: 'top top', end: 'bottom bottom', onUpdate: (st) => {
-    const t = st.progress * TOTAL + 15; let k = 0; MARKS.forEach((m, i) => { if (t >= m) k = i; });
-    links.forEach((a, i) => a.classList.toggle('on', i === k));
-  } });
+// ---------------------------------------------------------------- pages
+// note: seeks pass suppressEvents=false so the focus proxies' onUpdate still runs
+let page = 0, busy = false, pending = null;
+const links = [...document.querySelectorAll('.rail a')];
+const setRail = (n) => links.forEach((a, i) => a.classList.toggle('on', i === n));
+const p1 = (show) => gsap.to('#p1', { opacity: show ? 1 : 0, y: show ? 0 : -30, duration: show ? 0.7 : 0.45, ease: show ? 'power2.out' : 'power2.in', overwrite: true });
+const procedural = () => !REDUCED && !layout().m;
+const updateRot = () => { S.rot = !busy && (page === 1 || page === 3) ? 1 : 0; };
+
+function playTo(t, cb) {
+  const d = Math.abs(t - tl.time());
+  if (d < 0.5) { tl.seek(t, false); cb(); return; }
+  const dur = (REDUCED ? 0.5 : 1) * 2.3 * Math.pow(d / 300, 0.6);
+  tl.tweenTo(t, { duration: dur, ease: 'power1.inOut', onComplete: cb });
+}
+
+function goto(n) {
+  n = Math.max(0, Math.min(PAGES.length - 1, n));
+  if (busy) { pending = n; return; }
+  if (n === page) return;
+  const from = page;
+  page = n; busy = true; updateRot(); setRail(n);
+  history.replaceState(null, '', n ? `#${NAMES[n]}` : location.pathname + location.search);
+  const done = () => {
+    busy = false; updateRot();
+    if (pending !== null && pending !== page) { const p = pending; pending = null; goto(p); } else pending = null;
+  };
+  if (from === 0) {
+    p1(false);
+    if (!procedural()) return playTo(PAGES[n], done);
+    // finish the current zag into the next left one, then drive off to the left
+    sim.hold = true;
+    if (sim.side > 0) { sim.side = -1; sim.t = 0; }
+    G.mode = 'wait';
+    G.cb = () => { tl.seek(ARRIVE, false); playTo(PAGES[n], done); };
+    return;
+  }
+  if (n === 0) {
+    if (!procedural()) return playTo(0, () => { p1(true); done(); });
+    return playTo(ARRIVE, () => {
+      Object.assign(G, { mode: 'back', x: uToX(-0.4), z: 0, h: -Math.PI, w: 0, v: 0, phi: -Math.PI, tx: uToX(0.42), k: 1, gk: 0, t: 0 });
+      tl.seek(0, false);
+      G.cb = () => { p1(true); done(); };
+    });
+  }
+  playTo(PAGES[n], done);
+}
+
+// direct jump (deep links and screenshots)
+function jump(n) {
+  page = n; setRail(n); tl.seek(PAGES[n], false); updateRot();
+  gsap.set('#p1', { opacity: n === 0 ? 1 : 0 });
+}
+
+function inputs() {
+  // wheel: one page per gesture. A gesture re-arms after a short quiet gap, so trackpad inertia
+  // doesn't skip pages; a gesture during a transition queues the next page.
+  let acc = 0, armed = true, quiet = 0;
+  addEventListener('wheel', (e) => {
+    e.preventDefault();
+    clearTimeout(quiet); quiet = setTimeout(() => { armed = true; acc = 0; }, 160);
+    if (!armed) return;
+    acc += e.deltaY;
+    if (Math.abs(acc) > 30) { armed = false; goto((pending ?? page) + Math.sign(acc)); acc = 0; }
+  }, { passive: false });
+  addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (['ArrowDown', 'ArrowRight', 'PageDown', ' ', 'Enter'].includes(k)) { e.preventDefault(); goto((pending ?? page) + 1); }
+    else if (['ArrowUp', 'ArrowLeft', 'PageUp', 'Backspace'].includes(k)) { e.preventDefault(); goto((pending ?? page) - 1); }
+    else if (k === 'Home') goto(0);
+    else if (k === 'End') goto(PAGES.length - 1);
+  });
+  // click / tap anywhere moves on; swipes go either way
+  let ty = null, tx = null;
+  addEventListener('touchstart', (e) => { ty = e.touches[0].clientY; tx = e.touches[0].clientX; }, { passive: true });
+  addEventListener('touchend', (e) => {
+    if (ty === null) return;
+    const dy = ty - e.changedTouches[0].clientY, dx = tx - e.changedTouches[0].clientX; ty = null;
+    if (Math.abs(dy) > 40 && Math.abs(dy) > Math.abs(dx)) goto((pending ?? page) + Math.sign(dy));
+  }, { passive: true });
+  addEventListener('click', (e) => {
+    if (e.target.closest('.rail, .brand')) return;
+    goto((pending ?? page) + 1);
+  });
+  links.forEach((a, i) => a.addEventListener('click', (e) => { e.preventDefault(); goto(i); }));
+  document.querySelector('.brand').addEventListener('click', (e) => { e.preventDefault(); goto(0); });
 }
 
 function start() {
-  if (!STILL && !REDUCED) {
-    lenis = new Lenis({ lerp: 0.085, wheelMultiplier: 0.9, smoothWheel: true });
-    lenis.on('scroll', ScrollTrigger.update);
-    gsap.ticker.add((t) => lenis.raf(t * 1000));
-    gsap.ticker.lagSmoothing(0);
-  }
-  timeline();
+  buildTimeline();
+  inputs();
+  const n = NAMES.indexOf(location.hash.slice(1));
+  jump(n > 0 ? n : 0);
   document.getElementById('loader').classList.add('done');
-  gsap.ticker.add(() => frame(performance.now()));
   clock.last = performance.now();
-  document.querySelectorAll('.rail a, .brand').forEach((a) => a.addEventListener('click', (e) => {
-    e.preventDefault();
-    const y = toScroll(STOPS[a.getAttribute('href').slice(1)]);
-    if (lenis) lenis.scrollTo(y, { duration: 2.2 }); else scrollTo({ top: y, behavior: 'auto' });
-  }));
+  gsap.ticker.add(() => frame(performance.now()));
 }
 window.__S = S;
+window.__goto = (n, instant) => (instant ? jump(n) : goto(n));
+window.__G = G;
