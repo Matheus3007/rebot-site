@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rebot — 6S undercutter beetleweight</title>
+<meta name="description" content="Rebot: a 6S undercutter beetleweight. Drive, weapon and structure, from the real CAD.">
+<meta name="theme-color" content="#07080a">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2307080a'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23e5161c' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+<canvas id="stage" aria-hidden="true"></canvas>
+<div class="vignette"></div>
+
+<header class="top">
+  <a class="brand" href="#top" aria-label="Rebot"><span class="dot"></span>REBOT</a>
+  <nav class="rail" aria-label="Sections">
+    <a href="#s1" data-i="0"><i>01</i><span>Rebot</span></a>
+    <a href="#s2" data-i="1"><i>02</i><span>Drive</span></a>
+    <a href="#s3" data-i="2"><i>03</i><span>Weapon</span></a>
+    <a href="#s4" data-i="3"><i>04</i><span>Structure</span></a>
+    <a href="#s5" data-i="4"><i>05</i><span>Rebot</span></a>
+  </nav>
+</header>
+
+<div id="copy">
+  <article class="panel left" id="p1">
+    <p class="eyebrow">6S undercutter · beetleweight</p>
+    <h1>Rebot</h1>
+    <p class="lead">A 6S undercutter that packs a punch and is built to handle the vertical-spinner meta.</p>
+    <ul class="figs">
+      <li><b>6S</b><span>battery</span></li>
+      <li><b>2×</b><span>2207 drive</span></li>
+      <li><b>1×</b><span>2814 weapon</span></li>
+    </ul>
+    <p class="hint"><span class="tick"></span>Scroll</p>
+  </article>
+
+  <article class="panel right" id="p2">
+    <p class="eyebrow"><i>02</i> Drive</p>
+    <h2>Tangential drive.</h2>
+    <p class="lead">Two iFlight 2207 1800 kV outrunners, re-soldered to wye. The KV drops to about 1040, so there is more torque per amp (higher Kt) and lower motor currents.</p>
+    <p>Each motor shaft presses on the rim of its wheel. Measured from the CAD, that is a 10.5 : 1 reduction.</p>
+    <ul class="figs">
+      <li><b>1800 → 1040</b><span>kV, delta to wye</span></li>
+      <li><b>10.5 : 1</b><span>shaft Ø6 on Ø63 contact</span></li>
+      <li><b>Ø65</b><span>mm rubber wheel</span></li>
+    </ul>
+  </article>
+
+  <article class="panel left" id="p3">
+    <p class="eyebrow"><i>03</i> Weapon</p>
+    <h2>One fight per wheel.</h2>
+    <p class="lead">A pair of TPU reverse-hatchet wheels on the motor press against a VytaFlex 60 wheel bolted to the weapon, which turns on a dead shaft.</p>
+    <p>The TPU wheels last a single fight, which works well: spin-ups are fast, and the motor slips on hits. That isolates it and avoids current peaks, so the electronics survive longer and the battery can be undersized.</p>
+    <ul class="figs">
+      <li><b>2814 · 880 → 508</b><span>kV, re-soldered to wye</span></li>
+      <li><b>1.5 : 1</b><span>TPU to VytaFlex 60</span></li>
+    </ul>
+  </article>
+
+  <article class="panel left" id="p4a">
+    <p class="eyebrow"><i>04</i> Structure</p>
+    <h2>Light and durable.</h2>
+    <p class="lead">A sandwich of 2 mm carbon fibre, pressed onto aluminium standoffs.</p>
+  </article>
+  <article class="panel right" id="p4b">
+    <p class="lead">The standoffs are pressed inside the TPU unibody. That gives armour that resists hits while staying rigid.</p>
+    <p>The standoffs, and the bolts through them, keep the sandwich firmly fixed.</p>
+  </article>
+
+  <article class="panel right" id="p5">
+    <p class="eyebrow"><i>05</i> Rebot</p>
+    <h2 class="big" id="tag-h"></h2>
+    <p class="sub" id="tag-s"></p>
+    <p class="foot">rebot.spinup.fail</p>
+  </article>
+</div>
+
+<main id="scroll">
+  <section id="s1" style="height:100vh"></section>
+  <section id="s2" style="height:350vh"></section>
+  <section id="s3" style="height:330vh"></section>
+  <section id="s4" style="height:280vh"></section>
+  <section id="s5" style="height:180vh"></section>
+</main>
+
+<div id="loader"><div class="lw">REBOT</div><div class="lb"><i id="lbar"></i></div></div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

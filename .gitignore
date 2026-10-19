@@ -1,0 +1,6 @@
+node_modules
+dist
+.pylib
+shots
+__pycache__
+cad/*.STEP

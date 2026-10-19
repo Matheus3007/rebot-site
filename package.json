@@ -1,0 +1,22 @@
+{
+  "name": "rebot-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host --port 5173 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host --port 5174 --strictPort",
+    "models": "bash tools/models.sh"
+  },
+  "dependencies": {
+    "gsap": "^3.12.5",
+    "three": "^0.169.0",
+    "vite": "^5.4.10"
+  },
+  "devDependencies": {
+    "@gltf-transform/cli": "^4.0.10",
+    "meshoptimizer": "^0.21.0",
+    "playwright": "^1.64.1"
+  }
+}
