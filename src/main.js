@@ -615,6 +615,47 @@ function playTo(t, cb) {
   tl.tweenTo(t, { duration: dur, ease: 'none', onComplete: cb });
 }
 
+// Out-of-sequence jumps (e.g. 5 -> 1, 1 -> 4) go straight to the target page instead of playing every page
+// in between: the framing moves directly, while the parts reassemble (if the source page took the robot apart)
+// before the target page isolates or explodes its own. At the end the timeline is set to the target page,
+// which holds exactly the state the tweens arrived at.
+const STATES = [];
+const snap = () => ({ ...S, focus: S.focus.slice(), show: { ...S.show } });
+const PANELS = [[], ['#p2'], ['#p3'], ['#p4a', '#p4b'], ['#p5']];
+function direct(n, from, cb) {
+  const A = snap(), B = STATES[n], dur = (REDUCED ? 0.5 : 1) * 2.8;
+  const d = gsap.timeline({ defaults: { ease: 'power2.inOut' }, onComplete() { tl.seek(PAGES[n], false); cb(); } });
+  const at = (x, tw, vars) => d.to(tw, vars, x * dur);
+  const span = (x0, x1) => (x1 - x0) * dur;
+  // framing: one move from here to there
+  const cam = {};
+  for (const k of ['u', 'v', 'mv', 'scale', 'cyc', 'g', 'gf', 'showSpin', 'weaponSlow']) cam[k] = B[k];
+  cam.yaw = A.yaw + wrap(B.yaw - A.yaw);
+  at(0.02, S, { ...cam, duration: span(0.02, 0.98) });
+  at(0.02, S.focus, { endArray: B.focus, duration: span(0.02, 0.98) });
+  // explode: collapse first, expand late
+  for (const k of ['eR', 'eV', 'eS']) {
+    if (B[k] < A[k]) at(0.02, S, { [k]: B[k], duration: span(0.02, 0.5) });
+    else if (B[k] > A[k]) at(0.45, S, { [k]: B[k], duration: span(0.45, 0.98) });
+  }
+  // visibility: back to the whole robot, swap the isolated set while it is whole, then isolate again
+  const tags = ['module', 'weapon', 'struct'];
+  if (A.show.all < 1 && B.show.all < 1) {
+    at(0.02, S.show, { all: 1, duration: span(0.02, 0.35) });
+    at(0.45, S.show, { ...Object.fromEntries(tags.map((t) => [t, B.show[t]])), duration: span(0.45, 0.47) });
+    at(0.5, S.show, { all: B.show.all, duration: span(0.5, 0.85) });
+  } else if (B.show.all > A.show.all) {
+    at(0.02, S.show, { all: B.show.all, duration: span(0.02, 0.4) });
+    at(0.45, S.show, { ...Object.fromEntries(tags.map((t) => [t, B.show[t]])), duration: span(0.45, 0.47) });
+  } else {
+    at(0.2, S.show, { ...Object.fromEntries(tags.map((t) => [t, B.show[t]])), duration: span(0.2, 0.22) });
+    at(0.22, S.show, { all: B.show.all, duration: span(0.22, 0.62) });
+  }
+  // copy: the old panel leaves at once, the new one lands as the motion settles (the landing copy is p1())
+  if (PANELS[from].length) d.to(PANELS[from], { opacity: 0, y: -30, duration: 0.3, ease: 'power2.in' }, 0);
+  if (PANELS[n].length) d.fromTo(PANELS[n], { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out', stagger: 0.1, immediateRender: false }, 0.8 * dur);
+}
+
 function goto(n) {
   n = Math.max(0, Math.min(PAGES.length - 1, n));
   if (busy) { pending = n; return; }
@@ -626,9 +667,10 @@ function goto(n) {
     busy = false; updateRot();
     if (pending !== null && pending !== page) { const p = pending; pending = null; goto(p); } else pending = null;
   };
+  const move = Math.abs(n - from) > 1 ? (cb) => direct(n, from, cb) : (cb) => playTo(PAGES[n], cb);
   if (from === 0) p1(false);
-  if (n === 0) return playTo(0, () => { p1(true); done(); });
-  playTo(PAGES[n], done);
+  if (n === 0) return move(() => { p1(true); done(); });
+  move(done);
 }
 
 // direct jump (deep links and screenshots)
@@ -673,6 +715,8 @@ function inputs() {
 
 function start() {
   buildTimeline();
+  // the state each page lands on (this also initialises every tween in order, as a forward playback would)
+  for (const t of PAGES) { tl.seek(t, false); STATES.push(snap()); }
   inputs();
   const n = NAMES.indexOf(location.hash.slice(1));
   jump(n > 0 ? n : 0);
