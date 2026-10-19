@@ -450,7 +450,7 @@ function buildTimeline() {
     tl.fromTo(el, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 32, ease: 'power2.out', immediateRender: false }, tin);
     if (!last) tl.to(el, { opacity: 0, y: -30, duration: 26, ease: 'power2.in' }, tout);
   };
-  gsap.set('#p1', { yPercent: mq.matches ? 0 : -50 });
+  gsap.set('#p1', { yPercent: mq.matches ? 0 : -50, y: 0 }); // explicit y: GSAP can read the CSS -50% as a px offset and double it
   const P = PAGES, len = (i) => P[i + 1] - P[i];
   panel('p2', P[1] - 0.125 * len(0), P[1] + 0.02 * len(1));
   panel('p3', P[2] - 0.22 * len(1), P[2] + 0.02 * len(2));
