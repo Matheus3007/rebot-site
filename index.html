@@ -3,8 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Rebot — 6S undercutter beetleweight</title>
-<meta name="description" content="Rebot: a 6S undercutter beetleweight. Drive, weapon and structure, from the real CAD.">
+<title>Rebot | Project Overview</title>
+<meta name="description" content="Rebot, a 6S undercutter beetleweight. Drive, weapon and structure, from the real CAD.">
+<meta property="og:title" content="Rebot | Project Overview">
+<meta property="og:description" content="Rebot, a 6S undercutter beetleweight. Drive, weapon and structure, from the real CAD.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://rebot.spinup.fail/">
 <meta name="theme-color" content="#07080a">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2307080a'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23e5161c' stroke-width='3'/%3E%3C/svg%3E">
 <link rel="preload" href="models/rebot.glb" as="fetch" type="model/gltf-binary" crossorigin="anonymous">
@@ -42,7 +46,7 @@
 
   <article class="panel right" id="p2">
     <p class="eyebrow"><i>02</i> Drive</p>
-    <h2>Tangential drive.</h2>
+    <h2>Tangential drive</h2>
     <p class="lead">Two iFlight 2207 1800 kV outrunners, re-soldered to wye. The KV drops to about 1040, so there is more torque per amp (higher Kt) and lower motor currents.</p>
     <p>Each motor shaft presses on the rim of its wheel. Measured from the CAD, that is a 10.5 : 1 reduction.</p>
     <ul class="figs">
@@ -54,18 +58,21 @@
 
   <article class="panel left" id="p3">
     <p class="eyebrow"><i>03</i> Weapon</p>
-    <h2>One fight per ratchet.</h2>
+    <h2>One fight per ratchet</h2>
     <p class="lead">A single TPU reverse-ratchet wheel on the motor presses against a smooth VytaFlex 60 wheel bolted to the weapon, which turns on a dead shaft.</p>
     <p>The TPU wheel lasts a single fight, which works well: spin-ups are fast, and the motor slips on hits. That isolates it and avoids current peaks, so the electronics survive longer and the battery can be undersized.</p>
+    <p>The motor is an iFlight 2814 880 kV, re-soldered to wye (508 kV), geared 1.5 : 1. In theory, the blade reaches full speed in half a second and then carries about two thirds of the energy of a 9 mm pistol round.</p>
     <ul class="figs">
-      <li><b>2814 · 880 → 508</b><span>kV, re-soldered to wye</span></li>
-      <li><b>1.5 : 1</b><span>TPU to VytaFlex 60</span></li>
+      <li><b>6,800</b><span>rpm, top speed</span></li>
+      <li><b>290</b><span>km/h at the tooth</span></li>
+      <li><b>Ø230</b><span>mm Hardox blade</span></li>
+      <li><b>351 J</b><span>stored energy</span></li>
     </ul>
   </article>
 
   <article class="panel left" id="p4a">
     <p class="eyebrow"><i>04</i> Structure</p>
-    <h2>Light and durable.</h2>
+    <h2>Light and durable</h2>
     <p class="lead">A sandwich of 2 mm carbon fibre, pressed onto aluminium standoffs.</p>
   </article>
   <article class="panel right" id="p4b">

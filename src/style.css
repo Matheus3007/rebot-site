@@ -47,6 +47,7 @@ h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
 .figs li { flex: 1 1 8rem; padding: 14px 18px 0 0; display: flex; flex-direction: column; gap: 4px; }
 .figs b { font: 700 clamp(22px, 2.2vw, 32px)/1 var(--cond); letter-spacing: .02em; color: var(--text); white-space: nowrap; }
 .figs span { font: 500 11px/1.3 var(--mono); color: var(--muted); letter-spacing: .02em; }
+#p3 .figs li { flex-basis: 6rem; } /* four figures on one row */
 .hint { margin: 44px 0 0; font: 600 11px/1 var(--cond); letter-spacing: .3em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 14px; }
 .hint .tick { width: 1px; height: 38px; background: linear-gradient(var(--red), transparent); animation: tick 2.2s ease-in-out infinite; transform-origin: top; }
 @keyframes tick { 0%{ transform: scaleY(0);} 50%{ transform: scaleY(1);} 100%{ transform: scaleY(1); opacity: 0; } }
@@ -69,6 +70,7 @@ h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
   .lead { font-size: 16px; margin-bottom: 8px; }
   .panel p:not(.lead):not(.eyebrow):not(.hint):not(.sub):not(.foot) { font-size: 13.5px; margin-bottom: 8px; }
   .figs { margin-top: 12px; } .figs li { padding-top: 10px; flex-basis: 6rem; } .figs b { font-size: 19px; }
+  #p3 .figs li { flex-basis: 4rem; padding-right: 10px; }
   .hint { display: none; }
   #p4a { top: 76px; bottom: auto; padding: 14px var(--gut) 40px; background: linear-gradient(rgba(7,8,10,.92), rgba(7,8,10,.7) 60%, transparent); }
   #p5 { }

@@ -9,6 +9,9 @@ import { buildParts, offsets, spinOf, rotorTest } from './parts.js';
 import { creasedNormals } from './crease.js';
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// ?capture=1: for headless checks (software WebGL). No render loop, pixel ratio 1, no antialias;
+// window.__step(n, dt, draw) advances the sim by n fixed steps and renders the last one.
+const CAPTURE = new URLSearchParams(location.search).has('capture');
 
 // ending copy
 document.getElementById('tag-h').textContent = ending.headline;
@@ -16,9 +19,9 @@ document.getElementById('tag-s').textContent = ending.sub;
 
 // ---------------------------------------------------------------- renderer / scene
 const canvas = document.getElementById('stage');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: !CAPTURE, alpha: false, powerPreference: 'high-performance' });
 const mobile = () => innerWidth < 820;
-renderer.setPixelRatio(Math.min(devicePixelRatio, mobile() ? 1.5 : 2));
+renderer.setPixelRatio(CAPTURE ? 1 : Math.min(devicePixelRatio, mobile() ? 1.5 : 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.setClearColor(0x07080a, 1);
@@ -222,67 +225,19 @@ loader.load('models/rebot.glb', (gltf) => {
 // Never stops: go, turn ~90 deg with a slight drift, go again. Heading is steered by a PD controller
 // (underdamped: a little overshoot = follow-through), speed eases off in the turn but never reaches zero,
 // and the travel direction lags the heading (drift). The body stays flat: a lean would put the blade in the floor.
-const sim = { psi: Math.PI / 4, w: 0, phi: Math.PI / 4, v: 0.36, side: -1, t: 0, hold: false };
+const sim = { psi: Math.PI / 4, w: 0, phi: Math.PI / 4, v: 0.36, side: -1, t: 0 };
 const LEG = 1.9, AMP = Math.PI / 4, VMAX = 0.46, VMIN = 0.24;
 const KP = 70, KD = 10.5, GRIP = 3.2;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-const lerpAng = (a, b, k) => a + wrap(b - a) * k;
 function simStep(dt) {
   sim.t += dt;
-  if (sim.t > LEG && !sim.hold) { sim.t -= LEG; sim.side *= -1; }
+  if (sim.t > LEG) { sim.t -= LEG; sim.side *= -1; }
   const err = sim.side * AMP - sim.psi;
   sim.w += (KP * err - KD * sim.w) * dt;
   sim.psi += sim.w * dt;
   const vT = VMAX - (VMAX - VMIN) * Math.min(1, Math.abs(sim.w) / 3.5);
   sim.v += (vT - sim.v) * Math.min(1, dt * 4.5);
   sim.phi += (sim.psi - sim.phi) * Math.min(1, dt * GRIP);
-}
-
-// ---------------------------------------------------------------- procedural drive between landing and drive
-// Same controller, but the robot moves over a still floor instead of the floor moving under it.
-// 'wait': hold the next left zag; 'go': drive to the left mark and brake; 'back': drive to the landing mark
-// and hand back to the sim at speed; 'blend': fade the override into the timeline pose.
-const G = { mode: 'off', x: 0, z: 0, h: 0, w: 0, v: 0, phi: 0, tx: 0, k: 0, gk: 1, t: 0, cb: null };
-const uToX = (u) => u * halfH * (innerWidth / innerHeight);
-function goStep(dt) {
-  if (G.mode === 'wait') {
-    if (Math.abs(sim.psi + AMP) < 0.12 && Math.abs(sim.w) < 1.2) {
-      Object.assign(G, { mode: 'go', x: uToX(0.42), z: 0, h: BASE_YAW + sim.psi, w: sim.w, v: sim.v, phi: BASE_YAW + sim.phi, tx: uToX(-0.4), k: 1, t: 0 });
-    }
-    return;
-  }
-  if (G.mode === 'go' || G.mode === 'back') {
-    G.t += dt;
-    // steer at a carrot on the z=0 line ahead of the robot; brake on the distance left along x
-    const dir = G.mode === 'go' ? -1 : 1;
-    const left = (G.tx - G.x) * dir;
-    const hDes = Math.atan2(G.z, 0.09 * dir);
-    G.w += (KP * wrap(hDes - G.h) - KD * G.w) * dt;
-    G.h += G.w * dt;
-    const vT = G.mode === 'go' ? Math.min(VMAX, Math.sqrt(2 * 1.4 * Math.max(left, 0))) : VMAX;
-    G.v += (vT - G.v) * Math.min(1, dt * 4.5);
-    if (G.mode === 'go') G.v = Math.min(G.v, vT); // braking follows the stopping profile exactly
-    G.phi = lerpAng(G.phi, G.h, Math.min(1, dt * GRIP));
-    G.x += Math.cos(G.phi) * G.v * dt; G.z -= Math.sin(G.phi) * G.v * dt;
-    G.gk = Math.max(0, G.gk - dt * 2.5);
-    const arrived = G.mode === 'go' ? (left < 0.003 || (left < 0.015 && G.v < 0.03)) || G.t > 6 : left <= 0.004 || G.t > 6;
-    if (arrived) {
-      if (G.mode === 'back') {
-        // hand back to the sim at speed: it carries on zig-zagging from the current heading
-        Object.assign(sim, { psi: wrap(G.h - BASE_YAW), phi: wrap(G.phi - BASE_YAW), w: G.w, v: G.v, side: 1, t: 0, hold: false });
-      }
-      G.mode = 'blend';
-      const cb = G.cb; G.cb = null; cb && cb();
-    }
-    return;
-  }
-  if (G.mode === 'blend') {
-    G.v *= Math.exp(-dt / 0.12);
-    G.x += Math.cos(G.phi) * G.v * dt; G.z -= Math.sin(G.phi) * G.v * dt;
-    G.k = Math.max(0, G.k - dt / 0.35);
-    G.gk = Math.min(1, G.gk + dt / 0.35);
-    if (G.k === 0) { G.mode = 'off'; G.gk = 1; }
-  }
 }
 
 // showcase turntable: runs on its own while a drive/structure page is up, then settles back to its home angle
@@ -316,17 +271,16 @@ function layout() {
   return { x: u * halfW, y: v * halfH, sc, m };
 }
 
-function frame(now) {
+function frame(now, draw = true) {
   const dt = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
   const run = REDUCED ? 0 : 1;
-  if (run) { simStep(dt); turnStep(dt); goStep(dt); }
+  if (run) { simStep(dt); turnStep(dt); }
   const L = layout();
 
-  // timeline pose, then the procedural override on top
+  // timeline pose plus the zig-zag
   const cyc = S.cyc * run;
-  const yawTl = S.yaw + cyc * sim.psi + turn.a;
-  const yawTot = lerpAng(yawTl, G.h, G.k);
-  const px = THREE.MathUtils.lerp(L.x, G.x, G.k), pz = G.z * G.k;
+  const yawTot = S.yaw + cyc * sim.psi + turn.a;
+  const px = L.x, pz = 0;
   root.rotation.y = yawTot;
   root.scale.setScalar(L.sc);
   root.position.set(px, L.y, pz);
@@ -339,10 +293,10 @@ function frame(now) {
   const vRig = ((px - prev.x) * fx + (pz - prev.z) * fz) / Math.max(dt, 1e-4) / L.sc;
   const yawRate = wrap(yawTot - prev.yaw) / Math.max(dt, 1e-4);
   Object.assign(prev, { x: px, z: pz, yaw: yawTot });
-  const vBody = vRig + cyc * sim.v * G.gk;
+  const vBody = vRig + cyc * sim.v;
 
   // the ground slides against the travel direction (which lags the heading: drift)
-  const travel = S.yaw + sim.phi, gs = cyc * sim.v * G.gk * dt;
+  const travel = S.yaw + sim.phi, gs = cyc * sim.v * dt;
   gOff.x -= Math.cos(travel) * gs; gOff.y += Math.sin(travel) * gs;
   gOff.y += 0.03 * S.gf * dt * run; // slow drift on the floating floor
 
@@ -392,12 +346,12 @@ function frame(now) {
   ground.visible = S.g > 0.01;
   blob.material.opacity = S.show.all * (1 - S.gf); blob.visible = blob.material.opacity > 0.01;
 
-  renderer.render(scene, camera);
+  if (draw) renderer.render(scene, camera);
 }
 
 function resize() {
   const w = innerWidth, h = innerHeight;
-  renderer.setPixelRatio(Math.min(devicePixelRatio, mobile() ? 1.5 : 2));
+  renderer.setPixelRatio(CAPTURE ? 1 : Math.min(devicePixelRatio, mobile() ? 1.5 : 2));
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
@@ -405,7 +359,6 @@ addEventListener('resize', resize);
 resize();
 
 // ---------------------------------------------------------------- timeline (paused; pages are labels on it)
-const ARRIVE = 150;                         // Rebot parked on the left, before the drive explode
 const PAGES = [0, 300, 600, 840, 1000];     // landing, drive, weapon, structure, ending
 const NAMES = ['rebot', 'drive', 'weapon', 'structure', 'end'];
 const tl = gsap.timeline({ paused: true, defaults: { ease: 'power3.inOut' } });
@@ -429,23 +382,19 @@ function buildTimeline() {
   const seg = (a, b) => ({ t: (x) => a + x * (b - a), d: (x) => x * (b - a) });
   let q;
 
-  // ---- 01 -> arrive. Played only with reduced motion or on phones; otherwise the procedural drive covers it.
-  q = seg(0, ARRIVE);
-  at(q.t(0.02), S, { cyc: 0, duration: q.d(0.5), ease: 'power2.inOut' });
-  at(q.t(0.02), S, { u: -0.4, duration: q.d(0.98), ease: 'power2.inOut' });
-  at(q.t(0.02), S, { yaw: yawTo(-Math.PI), duration: q.d(0.98) });
-
-  // ---- arrive -> 02: turn to show the inner side, armour and axle bolt come off, isolate one module
-  q = seg(ARRIVE, PAGES[1]);
-  at(q.t(0), S, { yaw: yawTo(2.45), duration: q.d(0.5), ease: 'back.out(1.3)' });
-  at(q.t(0), S, { gf: 1, g: 0.55, duration: q.d(0.6) });
-  at(q.t(0.05), S, { showSpin: 1, duration: q.d(0.45) });
-  at(q.t(0.12), S, { eR: 1, duration: q.d(0.6) });
-  at(q.t(0.28), S.show, { module: 1, duration: q.d(0.02) });
-  at(q.t(0.3), S.show, { all: 0, duration: q.d(0.5) });
-  addFocus(q.t(0.3), q.d(0.68), FOCUS.module);
-  at(q.t(0.3), S, { scale: 1.65, duration: q.d(0.68) });
-  at(q.t(0.3), S, { u: -0.3, duration: q.d(0.68) });
+  // ---- 01 -> 02: Rebot keeps zig-zagging while the framing closes in on one drive module; the rest of the
+  // robot fades, the armour and axle bolt come off, and the zig-zag settles into the showcase pose
+  q = seg(0, PAGES[1]);
+  addFocus(q.t(0.02), q.d(0.55), FOCUS.module, 'power2.inOut');
+  at(q.t(0.02), S, { u: -0.3, duration: q.d(0.6), ease: 'power2.inOut' });
+  at(q.t(0.15), S, { scale: 1.65, duration: q.d(0.7), ease: 'power2.inOut' });
+  at(q.t(0.2), S.show, { module: 1, duration: q.d(0.02) });
+  at(q.t(0.22), S.show, { all: 0, duration: q.d(0.4) });
+  at(q.t(0.35), S, { cyc: 0, duration: q.d(0.5), ease: 'power2.inOut' });
+  at(q.t(0.35), S, { yaw: yawTo(2.45), duration: q.d(0.63) });
+  at(q.t(0.4), S, { gf: 1, g: 0.55, duration: q.d(0.55) });
+  at(q.t(0.4), S, { showSpin: 1, duration: q.d(0.45) });
+  at(q.t(0.45), S, { eR: 1, duration: q.d(0.53) });
 
   // ---- 02 -> 03: reassemble, explode vertically, isolate the weapon (no turntable: the drive does the moving)
   q = seg(PAGES[1], PAGES[2]);
@@ -493,7 +442,7 @@ function buildTimeline() {
   at(q.t(0.45), S, { cyc: 1, duration: q.d(0.4) });
   tl.set({}, {}, PAGES[4]);
 
-  // ---- copy panels (the landing copy is driven by the page logic, since its exit is procedural)
+  // ---- copy panels (the landing copy is driven by the page logic: it leaves as soon as a page change starts)
   const mq = matchMedia('(max-width: 820px)');
   const panel = (id, tin, tout, last = false) => {
     const el = document.getElementById(id);
@@ -503,7 +452,7 @@ function buildTimeline() {
   };
   gsap.set('#p1', { yPercent: mq.matches ? 0 : -50 });
   const P = PAGES, len = (i) => P[i + 1] - P[i];
-  panel('p2', P[1] - 0.25 * (P[1] - ARRIVE), P[1] + 0.02 * len(1));
+  panel('p2', P[1] - 0.125 * len(0), P[1] + 0.02 * len(1));
   panel('p3', P[2] - 0.22 * len(1), P[2] + 0.02 * len(2));
   panel('p4a', P[3] - 0.22 * len(2), P[3] + 0.02 * len(3));
   panel('p4b', P[3] - 0.17 * len(2), P[3] + 0.02 * len(3));
@@ -516,7 +465,6 @@ let page = 0, busy = false, pending = null;
 const links = [...document.querySelectorAll('.rail a')];
 const setRail = (n) => links.forEach((a, i) => a.classList.toggle('on', i === n));
 const p1 = (show) => gsap.to('#p1', { opacity: show ? 1 : 0, y: show ? 0 : -30, duration: show ? 0.7 : 0.45, ease: show ? 'power2.out' : 'power2.in', overwrite: true });
-const procedural = () => !REDUCED && !layout().m;
 const updateRot = () => { S.rot = !busy && (page === 1 || page === 3) ? 1 : 0; };
 
 function playTo(t, cb) {
@@ -539,24 +487,8 @@ function goto(n) {
     busy = false; updateRot();
     if (pending !== null && pending !== page) { const p = pending; pending = null; goto(p); } else pending = null;
   };
-  if (from === 0) {
-    p1(false);
-    if (!procedural()) return playTo(PAGES[n], done);
-    // finish the current zag into the next left one, then drive off to the left
-    sim.hold = true;
-    if (sim.side > 0) { sim.side = -1; sim.t = 0; }
-    G.mode = 'wait';
-    G.cb = () => { sim.hold = false; tl.seek(ARRIVE, false); playTo(PAGES[n], done); };
-    return;
-  }
-  if (n === 0) {
-    if (!procedural()) return playTo(0, () => { p1(true); done(); });
-    return playTo(ARRIVE, () => {
-      Object.assign(G, { mode: 'back', x: uToX(-0.4), z: 0, h: -Math.PI, w: 0, v: 0, phi: -Math.PI, tx: uToX(0.42), k: 1, gk: 0, t: 0 });
-      tl.seek(0, false);
-      G.cb = () => { p1(true); done(); };
-    });
-  }
+  if (from === 0) p1(false);
+  if (n === 0) return playTo(0, () => { p1(true); done(); });
   playTo(PAGES[n], done);
 }
 
@@ -607,10 +539,12 @@ function start() {
   jump(n > 0 ? n : 0);
   document.getElementById('loader').classList.add('done');
   clock.last = performance.now();
-  gsap.ticker.add(() => frame(performance.now()));
+  if (CAPTURE) {
+    window.__step = (n = 1, dt = 1 / 60, draw = true) => { for (let i = 0; i < n; i++) frame(clock.last + dt * 1000, draw && i === n - 1); };
+    window.__step();
+  } else gsap.ticker.add(() => frame(performance.now()));
 }
 window.__S = S;
 window.__goto = (n, instant) => (instant ? jump(n) : goto(n));
-window.__G = G;
 window.__sim = sim;
 window.__tl = tl;
