@@ -423,61 +423,74 @@ function buildTimeline() {
     tl.fromTo(prox, { k: 0 }, { k: 1, duration: d, ease, immediateRender: false, onUpdate() { for (let i = 0; i < 3; i++) S.focus[i] = from[i] + (to[i] - from[i]) * prox.k; } }, t);
   };
 
-  // isolation groups switch on just before 'all' fades (they only matter while all < 1)
-  at(190, S.show, { module: 1, duration: 8 });
-  at(490, S.show, { module: 0, weapon: 1, duration: 8 });
-  at(715, S.show, { weapon: 0, struct: 1, duration: 8 });
-  at(950, S.show, { struct: 0, duration: 8 });
+  // Each page-to-page segment is filled end to end: the old copy leaves while the model already moves,
+  // steps overlap (reassemble -> explode -> isolate -> zoom), and the new copy lands as the motion settles.
+  // seg(a, b) maps 0..1 to a span of the timeline.
+  const seg = (a, b) => ({ t: (x) => a + x * (b - a), d: (x) => x * (b - a) });
+  let q;
 
   // ---- 01 -> arrive. Played only with reduced motion or on phones; otherwise the procedural drive covers it.
-  at(40, S, { cyc: 0, duration: 60, ease: 'power2.inOut' });
-  at(40, S, { u: -0.4, duration: 108, ease: 'power2.inOut' });
-  at(40, S, { yaw: yawTo(-Math.PI), duration: 108 });
+  q = seg(0, ARRIVE);
+  at(q.t(0.02), S, { cyc: 0, duration: q.d(0.5), ease: 'power2.inOut' });
+  at(q.t(0.02), S, { u: -0.4, duration: q.d(0.98), ease: 'power2.inOut' });
+  at(q.t(0.02), S, { yaw: yawTo(-Math.PI), duration: q.d(0.98) });
+
   // ---- arrive -> 02: turn to show the inner side, armour and axle bolt come off, isolate one module
-  at(ARRIVE, S, { yaw: yawTo(2.45), duration: 55, ease: 'back.out(1.4)' });
-  at(ARRIVE, S, { gf: 1, g: 0.55, duration: 65 });
-  at(ARRIVE + 10, S, { showSpin: 1, duration: 50 });
-  at(170, S, { eR: 1, duration: 75 });
-  at(200, S.show, { all: 0, duration: 55 });
-  addFocus(200, 75, FOCUS.module);
-  at(200, S, { scale: 1.65, duration: 75 });
-  at(200, S, { u: -0.3, duration: 75 });
+  q = seg(ARRIVE, PAGES[1]);
+  at(q.t(0), S, { yaw: yawTo(2.45), duration: q.d(0.5), ease: 'back.out(1.3)' });
+  at(q.t(0), S, { gf: 1, g: 0.55, duration: q.d(0.6) });
+  at(q.t(0.05), S, { showSpin: 1, duration: q.d(0.45) });
+  at(q.t(0.12), S, { eR: 1, duration: q.d(0.6) });
+  at(q.t(0.28), S.show, { module: 1, duration: q.d(0.02) });
+  at(q.t(0.3), S.show, { all: 0, duration: q.d(0.5) });
+  addFocus(q.t(0.3), q.d(0.68), FOCUS.module);
+  at(q.t(0.3), S, { scale: 1.65, duration: q.d(0.68) });
+  at(q.t(0.3), S, { u: -0.3, duration: q.d(0.68) });
+
   // ---- 02 -> 03: reassemble, explode vertically, isolate the weapon (no turntable: the drive does the moving)
-  at(385, S.show, { all: 1, duration: 45 });
-  addFocus(385, 60, FOCUS.robot);
-  at(385, S, { eR: 0, duration: 60 });
-  at(385, S, { scale: 1.05, duration: 60 });
-  at(385, S, { u: 0.1, duration: 60 });
-  at(390, S, { yaw: yawTo(-0.55), duration: 55 });
-  at(445, S, { eV: 1, duration: 65 });
-  at(445, S, { weaponSlow: 1, duration: 60 });
-  at(500, S.show, { all: 0, duration: 50 });
-  addFocus(500, 60, FOCUS.weapon);
-  at(500, S, { scale: 1.5, duration: 60 });
-  at(500, S, { u: 0.36, duration: 60 });
+  q = seg(PAGES[1], PAGES[2]);
+  at(q.t(0.02), S.show, { all: 1, duration: q.d(0.3) });
+  addFocus(q.t(0.02), q.d(0.4), FOCUS.robot);
+  at(q.t(0.02), S, { eR: 0, duration: q.d(0.4) });
+  at(q.t(0.02), S, { scale: 1.05, duration: q.d(0.4) });
+  at(q.t(0.02), S, { u: 0.1, duration: q.d(0.4) });
+  at(q.t(0.02), S, { yaw: yawTo(-0.55), duration: q.d(0.45) });
+  at(q.t(0.3), S, { eV: 1, duration: q.d(0.4) });
+  at(q.t(0.3), S, { weaponSlow: 1, duration: q.d(0.35) });
+  at(q.t(0.5), S.show, { module: 0, weapon: 1, duration: q.d(0.02) });
+  at(q.t(0.52), S.show, { all: 0, duration: q.d(0.33) });
+  addFocus(q.t(0.52), q.d(0.46), FOCUS.weapon);
+  at(q.t(0.52), S, { scale: 1.5, duration: q.d(0.46) });
+  at(q.t(0.52), S, { u: 0.36, duration: q.d(0.46) });
+
   // ---- 03 -> 04: reassemble, structure
-  at(675, S.show, { all: 1, duration: 40 });
-  addFocus(675, 50, FOCUS.robot);
-  at(675, S, { eV: 0, duration: 50 });
-  at(675, S, { scale: 1.05, duration: 50 });
-  at(675, S, { u: 0, duration: 50 });
-  at(725, S.show, { all: 0, duration: 45 });
-  at(725, S, { eS: 1, duration: 60 });
-  addFocus(725, 60, FOCUS.struct);
-  at(725, S, { scale: 1.12, duration: 60 });
-  at(725, S, { yaw: yawTo(-1.15), duration: 60 });
-  at(725, S, { mv: 0.04, duration: 60 });
+  q = seg(PAGES[2], PAGES[3]);
+  at(q.t(0.02), S.show, { all: 1, duration: q.d(0.3) });
+  addFocus(q.t(0.02), q.d(0.4), FOCUS.robot);
+  at(q.t(0.02), S, { eV: 0, duration: q.d(0.4) });
+  at(q.t(0.02), S, { scale: 1.05, duration: q.d(0.4) });
+  at(q.t(0.02), S, { u: 0, duration: q.d(0.4) });
+  at(q.t(0.4), S.show, { weapon: 0, struct: 1, duration: q.d(0.02) });
+  at(q.t(0.42), S.show, { all: 0, duration: q.d(0.38) });
+  at(q.t(0.42), S, { eS: 1, duration: q.d(0.5) });
+  addFocus(q.t(0.42), q.d(0.55), FOCUS.struct);
+  at(q.t(0.42), S, { scale: 1.12, duration: q.d(0.55) });
+  at(q.t(0.42), S, { yaw: yawTo(-1.15), duration: q.d(0.55) });
+  at(q.t(0.42), S, { mv: 0.04, duration: q.d(0.55) });
+
   // ---- 04 -> 05: back together, zig-zag again
-  at(915, S.show, { all: 1, duration: 40 });
-  at(915, S, { eS: 0, duration: 50 });
-  addFocus(915, 50, FOCUS.robot);
-  at(915, S, { scale: 1.0, duration: 50 });
-  at(915, S, { u: -0.4, duration: 50 });
-  at(915, S, { mv: 0.3, duration: 50 });
-  at(915, S, { yaw: yawTo(BASE_YAW), duration: 50 });
-  at(915, S, { gf: 0, g: 1, duration: 50 });
-  at(940, S, { cyc: 1, duration: 40 });
-  at(915, S, { showSpin: 0, weaponSlow: 0, duration: 40 });
+  q = seg(PAGES[3], PAGES[4]);
+  at(q.t(0.03), S.show, { all: 1, duration: q.d(0.37) });
+  at(q.t(0.03), S, { eS: 0, duration: q.d(0.47) });
+  addFocus(q.t(0.03), q.d(0.57), FOCUS.robot);
+  at(q.t(0.03), S, { scale: 1.0, duration: q.d(0.57) });
+  at(q.t(0.03), S, { u: -0.4, duration: q.d(0.57) });
+  at(q.t(0.03), S, { mv: 0.3, duration: q.d(0.57) });
+  at(q.t(0.03), S, { yaw: yawTo(BASE_YAW), duration: q.d(0.57) });
+  at(q.t(0.1), S, { gf: 0, g: 1, duration: q.d(0.5) });
+  at(q.t(0.1), S, { showSpin: 0, weaponSlow: 0, duration: q.d(0.4) });
+  at(q.t(0.5), S.show, { struct: 0, duration: q.d(0.02) });
+  at(q.t(0.45), S, { cyc: 1, duration: q.d(0.4) });
   tl.set({}, {}, PAGES[4]);
 
   // ---- copy panels (the landing copy is driven by the page logic, since its exit is procedural)
@@ -485,15 +498,16 @@ function buildTimeline() {
   const panel = (id, tin, tout, last = false) => {
     const el = document.getElementById(id);
     gsap.set(el, { yPercent: mq.matches ? 0 : -50, y: 36, opacity: 0 });
-    tl.fromTo(el, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 24, ease: 'power2.out', immediateRender: false }, tin);
-    if (!last) tl.to(el, { opacity: 0, y: -30, duration: 22, ease: 'power2.in' }, tout);
+    tl.fromTo(el, { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 32, ease: 'power2.out', immediateRender: false }, tin);
+    if (!last) tl.to(el, { opacity: 0, y: -30, duration: 26, ease: 'power2.in' }, tout);
   };
   gsap.set('#p1', { yPercent: mq.matches ? 0 : -50 });
-  panel('p2', 255, 372);
-  panel('p3', 545, 662);
-  panel('p4a', 772, 895);
-  panel('p4b', 788, 895);
-  panel('p5', 960, 0, true);
+  const P = PAGES, len = (i) => P[i + 1] - P[i];
+  panel('p2', P[1] - 0.25 * (P[1] - ARRIVE), P[1] + 0.02 * len(1));
+  panel('p3', P[2] - 0.22 * len(1), P[2] + 0.02 * len(2));
+  panel('p4a', P[3] - 0.22 * len(2), P[3] + 0.02 * len(3));
+  panel('p4b', P[3] - 0.17 * len(2), P[3] + 0.02 * len(3));
+  panel('p5', P[4] - 0.3 * len(3), 0, true);
 }
 
 // ---------------------------------------------------------------- pages
@@ -508,9 +522,10 @@ const updateRot = () => { S.rot = !busy && (page === 1 || page === 3) ? 1 : 0; }
 function playTo(t, cb) {
   const d = Math.abs(t - tl.time());
   if (d < 0.5) { tl.seek(t, false); cb(); return; }
-  // ~4 s for one page; longer jumps grow sub-linearly so a rail jump stays continuous but not endless
-  const dur = (REDUCED ? 0.5 : 1) * 4.0 * Math.pow(d / 300, 0.5);
-  tl.tweenTo(t, { duration: dur, ease: 'power1.inOut', onComplete: cb });
+  // ~2.5-3 s for one page; longer jumps grow sub-linearly so a rail jump stays continuous but not endless.
+  // Linear playback: the motion inside each segment carries its own easing.
+  const dur = (REDUCED ? 0.5 : 1) * 2.6 * Math.pow(d / 240, 0.5);
+  tl.tweenTo(t, { duration: dur, ease: 'none', onComplete: cb });
 }
 
 function goto(n) {
@@ -598,3 +613,4 @@ window.__S = S;
 window.__goto = (n, instant) => (instant ? jump(n) : goto(n));
 window.__G = G;
 window.__sim = sim;
+window.__tl = tl;
