@@ -508,7 +508,8 @@ const updateRot = () => { S.rot = !busy && (page === 1 || page === 3) ? 1 : 0; }
 function playTo(t, cb) {
   const d = Math.abs(t - tl.time());
   if (d < 0.5) { tl.seek(t, false); cb(); return; }
-  const dur = (REDUCED ? 0.5 : 1) * 2.3 * Math.pow(d / 300, 0.6);
+  // ~4 s for one page; longer jumps grow sub-linearly so a rail jump stays continuous but not endless
+  const dur = (REDUCED ? 0.5 : 1) * 4.0 * Math.pow(d / 300, 0.5);
   tl.tweenTo(t, { duration: dur, ease: 'power1.inOut', onComplete: cb });
 }
 
@@ -530,7 +531,7 @@ function goto(n) {
     sim.hold = true;
     if (sim.side > 0) { sim.side = -1; sim.t = 0; }
     G.mode = 'wait';
-    G.cb = () => { tl.seek(ARRIVE, false); playTo(PAGES[n], done); };
+    G.cb = () => { sim.hold = false; tl.seek(ARRIVE, false); playTo(PAGES[n], done); };
     return;
   }
   if (n === 0) {
@@ -596,3 +597,4 @@ function start() {
 window.__S = S;
 window.__goto = (n, instant) => (instant ? jump(n) : goto(n));
 window.__G = G;
+window.__sim = sim;
