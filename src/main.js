@@ -10,14 +10,14 @@ import gsap from 'gsap';
 import { ending } from './content.js';
 import { buildParts, offsets, spinOf, rotorTest } from './parts.js';
 import { creasedNormals } from './crease.js';
-import { AGX_GLSL } from './agx.js';
+import { AGX_GLSL, agxDisplayJS, agxDisplayInvJS } from './agx.js';
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // ?capture=1: for headless checks (software WebGL). No render loop, pixel ratio 1, no antialias, no AO/grain
 // (add &fx=1 to keep them); window.__step(n, dt, draw) advances the sim by n fixed steps and renders the last one.
 const Q = new URLSearchParams(location.search);
 const CAPTURE = Q.has('capture');
-const FX = !CAPTURE || Q.has('fx');
+const FX = (!CAPTURE || Q.has('fx')) && !Q.has('nofx'); // ?nofx: plain render, for comparing frame rates
 
 // ending copy
 document.getElementById('tag-h').textContent = ending.headline;
@@ -36,7 +36,7 @@ renderer.setClearColor(BG, 1);
 const bgDisplay = new THREE.Color(BG).convertLinearToSRGB();
 const TONE = {
   uExposure: { value: renderer.toneMappingExposure },
-  uBgLin: { value: new THREE.Vector3(...new THREE.Color(BG).toArray()) },
+  uBlack: { value: new THREE.Vector3(...agxDisplayJS(new THREE.Color(BG).toArray(), renderer.toneMappingExposure)) }, // AgX(backdrop)
   uBgD: { value: new THREE.Vector3(bgDisplay.r, bgDisplay.g, bgDisplay.b) },
 };
 
@@ -90,15 +90,31 @@ root.add(model); scene.add(root);
 // ---------------------------------------------------------------- ground
 // The grid authors display colours. Under the post chain it writes the inverse of the final pass instead
 // (opaque, already blended over the backdrop), so it lands on exactly the same colours as a direct render.
+// The inverse comes from a lookup over (red mix, alpha); alpha is stored on a sqrt axis for precision near black.
+const LUT_N = 64;
+function gridLut() {
+  const grey = [0.9, 0.9, 0.9], red = [0.9, 0.08, 0.1], bg = TONE.uBgD.value.toArray(), black = TONE.uBlack.value.toArray();
+  const data = new Uint16Array(LUT_N * LUT_N * 4);
+  for (let j = 0; j < LUT_N; j++) for (let i = 0; i < LUT_N; i++) {
+    const k = i / (LUT_N - 1), A = (j / (LUT_N - 1)) ** 2;
+    const d = [0, 1, 2].map((c) => bg[c] + (grey[c] + (red[c] - grey[c]) * k - bg[c]) * A);
+    const u = d.map((x, c) => black[c] + (x - bg[c]) * (1 - black[c]) / (1 - bg[c])); // undo the black remap
+    const x = agxDisplayInvJS(u, TONE.uExposure.value), o = (j * LUT_N + i) * 4;
+    for (let c = 0; c < 3; c++) data[o + c] = THREE.DataUtils.toHalfFloat(x[c]);
+    data[o + 3] = THREE.DataUtils.toHalfFloat(1);
+  }
+  const t = new THREE.DataTexture(data, LUT_N, LUT_N, THREE.RGBAFormat, THREE.HalfFloatType);
+  t.minFilter = t.magFilter = THREE.LinearFilter; t.needsUpdate = true;
+  return t;
+}
 const groundMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false,
   defines: FX ? { AGX_INV: '' } : {},
-  uniforms: { uOff: { value: new THREE.Vector2() }, uFade: { value: 1 }, uC: { value: new THREE.Vector2() }, ...TONE },
+  uniforms: { uOff: { value: new THREE.Vector2() }, uFade: { value: 1 }, uC: { value: new THREE.Vector2() }, uLut: { value: FX ? gridLut() : null } },
   vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
   fragmentShader: `
     varying vec3 vW; uniform vec2 uOff; uniform float uFade; uniform vec2 uC;
-    uniform float uExposure; uniform vec3 uBgLin, uBgD;
-    ${AGX_GLSL}
+    uniform sampler2D uLut;
     float grid(vec2 p, float s, float w){ vec2 q = p / s; vec2 d = abs(fract(q - .5) - .5) / fwidth(q); return 1. - min(min(d.x, d.y) / w, 1.); }
     void main(){
       vec2 p = vW.xz - uOff;
@@ -108,8 +124,8 @@ const groundMat = new THREE.ShaderMaterial({
       float a = clamp(minor * .07 + major * .42, 0., 1.);
       vec3 col = mix(vec3(.9), vec3(.9,.08,.1), major * .42 / max(a, 1e-3));
     #ifdef AGX_INV
-      vec3 d = mix(uBgD, col, a * fade);
-      gl_FragColor = vec4(agxDisplayInv(blackRemapInv(d, agxDisplay(uBgLin, uExposure), uBgD), uExposure), 1.);
+      vec2 q = vec2(major * .42 / max(a, 1e-3), sqrt(a * fade)) * ${(LUT_N - 1).toFixed(1)} + .5;
+      gl_FragColor = vec4(texture2D(uLut, q / ${LUT_N.toFixed(1)}).rgb, 1.);
     #else
       gl_FragColor = vec4(col, a * fade);
     #endif
@@ -323,6 +339,7 @@ function frame(now, draw = true) {
   const dt = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
   const run = REDUCED ? 0 : 1;
   if (run) { simStep(dt); turnStep(dt); }
+  perfStep(dt);
   const L = layout();
 
   // timeline pose plus the zig-zag
@@ -408,11 +425,11 @@ const FinalShader = {
   uniforms: { tDiffuse: { value: null }, uTime: { value: 0 }, uAmt: { value: 0.035 }, ...TONE },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
   fragmentShader: `
-    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAmt; uniform float uExposure; uniform vec3 uBgLin, uBgD; varying vec2 vUv;
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAmt; uniform float uExposure; uniform vec3 uBlack, uBgD; varying vec2 vUv;
     ${AGX_GLSL}
     float h(vec2 p){ p = fract(p * vec2(443.897, 441.423)); p += dot(p, p.yx + 19.19); return fract((p.x + p.y) * p.x); }
     void main(){
-      vec3 c = blackRemap(agxDisplay(texture2D(tDiffuse, vUv).rgb, uExposure), agxDisplay(uBgLin, uExposure), uBgD);
+      vec3 c = blackRemap(agxDisplay(texture2D(tDiffuse, vUv).rgb, uExposure), uBlack, uBgD);
       float l = dot(c, vec3(.2126, .7152, .0722));
       float n = h(gl_FragCoord.xy + fract(uTime * 7.13) * 917.) - .5;
       c += n * uAmt * mix(.25, 1., smoothstep(.0, .3, l));
@@ -421,17 +438,17 @@ const FinalShader = {
 };
 let composer = null, gtao = null, grain = null;
 if (CAPTURE) window.__fx = () => ({ composer, gtao, grain });
-const AO_RES = () => (mobile() ? 0.5 : 0.75);
+const AO_RES = 0.5; // of the post resolution; the denoise hides the upsampling
 if (FX) {
   const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: mobile() ? 2 : 4 });
   composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
   gtao = new GTAOPass(scene, camera, 1, 1);
-  gtao.updateGtaoMaterial({ radius: 0.035, distanceExponent: 1.4, thickness: 0.02, distanceFallOff: 1, scale: 1.3, samples: mobile() ? 8 : 16 });
-  gtao.updatePdMaterial({ samples: mobile() ? 8 : 16, radius: 6 });
+  gtao.updateGtaoMaterial({ radius: 0.035, distanceExponent: 1.4, thickness: 0.02, distanceFallOff: 1, scale: 1.3, samples: mobile() ? 6 : 8 });
+  gtao.updatePdMaterial({ samples: mobile() ? 6 : 8, radius: 6 });
   gtao.blendIntensity = 1;
   const setAO = gtao.setSize.bind(gtao);
-  gtao.setSize = (w, h) => setAO(Math.max(1, Math.round(w * AO_RES())), Math.max(1, Math.round(h * AO_RES())));
+  gtao.setSize = (w, h) => setAO(Math.max(1, Math.round(w * AO_RES)), Math.max(1, Math.round(h * AO_RES)));
   const hide = gtao.overrideVisibility.bind(gtao);
   const show = gtao.restoreVisibility.bind(gtao);
   gtao.overrideVisibility = () => { hide(); scene.background = null; scene.traverse((o) => { if (o.isMesh && o.material.depthWrite === false) o.visible = false; }); };
@@ -442,9 +459,33 @@ if (FX) {
   composer.addPass(grain);
 }
 
+// Resolution: the direct render keeps the full density; the post chain is capped (it is per pixel), and a
+// frame-time guard steps it down further if a machine can't hold ~50 fps. It never steps back up, so it
+// can't oscillate.
+const perf = { avg: 1 / 60, t: 0, scale: 1 };
+function prFor() {
+  if (CAPTURE) return 1;
+  if (!composer) return Math.min(devicePixelRatio, mobile() ? 1.5 : 2);
+  return Math.max(0.75, Math.min(devicePixelRatio, mobile() ? 1.25 : 1.5) * perf.scale);
+}
+// ?fps: a small readout of frame rate and render resolution, for checking on real hardware
+const fpsEl = Q.has('fps') ? Object.assign(document.body.appendChild(document.createElement('div')), {
+  style: 'position:fixed;left:8px;bottom:8px;z-index:99;font:12px/1.3 monospace;color:#fff;background:rgba(0,0,0,.7);padding:4px 6px;pointer-events:none',
+}) : null;
+const fpsAcc = { n: 0, t: 0 };
+function perfStep(dt) {
+  if (fpsEl) {
+    fpsAcc.n++; fpsAcc.t += dt;
+    if (fpsAcc.t > 0.5) { fpsEl.textContent = `${Math.round(fpsAcc.n / fpsAcc.t)} fps · ${renderer.domElement.width}×${renderer.domElement.height} · pr ${prFor().toFixed(2)}${composer ? '' : ' · no post'}`; fpsAcc.n = fpsAcc.t = 0; }
+  }
+  if (CAPTURE || !composer || perf.scale <= 0.67) return;
+  perf.avg += (dt - perf.avg) * 0.05; perf.t += dt;
+  if (perf.t > 2 && perf.avg > 1 / 50) { perf.scale -= 0.165; perf.t = 0; perf.avg = 1 / 60; resize(); }
+}
+
 function resize() {
   const w = innerWidth, h = innerHeight;
-  const pr = CAPTURE ? 1 : Math.min(devicePixelRatio, mobile() ? 1.5 : 2);
+  const pr = prFor();
   renderer.setPixelRatio(pr);
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
