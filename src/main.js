@@ -296,12 +296,35 @@ const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 function simStep(dt) {
   sim.t += dt;
   if (sim.t > LEG) { sim.t -= LEG; sim.side *= -1; }
-  const err = sim.side * AMP - sim.psi;
+  const err = sim.side * AMP + pull.bias - sim.psi;
   sim.w += (KP * err - KD * sim.w) * dt;
   sim.psi += sim.w * dt;
   const vT = VMAX - (VMAX - VMIN) * Math.min(1, Math.abs(sim.w) / 3.5);
   sim.v += (vT - sim.v) * Math.min(1, dt * 4.5);
   sim.phi += (sim.psi - sim.phi) * Math.min(1, dt * GRIP);
+}
+
+// cursor pull (landing/ending): the zig-zag keeps its swing, but its centre leans a little toward the mouse
+// on the floor. sin() of the relative angle: no pull when the cursor is straight ahead or straight behind,
+// most when it is off to a side, and no flip anywhere. Mouse/pen only; it fades with the zig-zag itself.
+const pull = { ndc: new THREE.Vector2(), on: false, bias: 0 };
+const PULL = 0.35;
+addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch') return;
+  pull.on = true; pull.ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+});
+document.documentElement.addEventListener('pointerleave', () => { pull.on = false; });
+const ray = new THREE.Raycaster(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+function pullStep(dt) {
+  let target = 0;
+  if (pull.on && S.cyc > 0.01) {
+    ray.setFromCamera(pull.ndc, camera);
+    floor.constant = -ground.position.y;
+    const r = ray.ray, onFloor = r.intersectPlane(floor, hit);
+    const dx = onFloor ? hit.x - root.position.x : r.direction.x, dz = onFloor ? hit.z - root.position.z : r.direction.z;
+    target = PULL * Math.sin(Math.atan2(-dz, dx) - S.yaw) * S.cyc;
+  }
+  pull.bias += (target - pull.bias) * Math.min(1, dt * 2);
 }
 
 // showcase turntable: runs on its own while a drive/structure page is up, then settles back to its home angle
@@ -338,7 +361,7 @@ function layout() {
 function frame(now, draw = true) {
   const dt = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
   const run = REDUCED ? 0 : 1;
-  if (run) { simStep(dt); turnStep(dt); }
+  if (run) { pullStep(dt); simStep(dt); turnStep(dt); }
   perfStep(dt);
   const L = layout();
 
