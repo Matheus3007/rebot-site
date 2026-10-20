@@ -11,6 +11,7 @@ import { ending } from './content.js';
 import { buildParts, offsets, spinOf, rotorTest } from './parts.js';
 import { creasedNormals } from './crease.js';
 import { AGX_GLSL, agxDisplayJS, agxDisplayInvJS } from './agx.js';
+import { createBoxes } from './boxes.js';
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // ?capture=1: for headless checks (software WebGL). No render loop, pixel ratio 1, no antialias, no AO/grain
@@ -133,6 +134,10 @@ const groundMat = new THREE.ShaderMaterial({
 });
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(7, 7), groundMat);
 ground.rotation.x = -Math.PI / 2; ground.renderOrder = -2; scene.add(ground);
+// ending minigame boxes (src/boxes.js): drawn with the grid's colours, through the same lookup under post
+const boxes = createBoxes({ lut: groundMat.uniforms.uLut.value, lutN: LUT_N, bgD: TONE.uBgD.value });
+scene.add(boxes.mesh);
+if (CAPTURE) window.__boxes = boxes;
 
 // soft contact shadow (child of model, CAD frame)
 const blobTex = (() => {
@@ -293,38 +298,71 @@ const sim = { psi: Math.PI / 4, w: 0, phi: Math.PI / 4, v: 0.36, side: -1, t: 0 
 const LEG = 1.9, AMP = Math.PI / 4, VMAX = 0.46, VMIN = 0.24;
 const KP = 70, KD = 10.5, GRIP = 3.2;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-function simStep(dt) {
-  sim.t += dt;
-  if (sim.t > LEG) { sim.t -= LEG; sim.side *= -1; }
-  const err = sim.side * AMP + pull.bias - sim.psi;
-  sim.w += (KP * err - KD * sim.w) * dt;
-  sim.psi += sim.w * dt;
-  const vT = VMAX - (VMAX - VMIN) * Math.min(1, Math.abs(sim.w) / 3.5);
-  sim.v += (vT - sim.v) * Math.min(1, dt * 4.5);
-  sim.phi += (sim.psi - sim.phi) * Math.min(1, dt * GRIP);
+function simStep(dt, st = sim) {
+  st.t += dt;
+  if (st.t > LEG) { st.t -= LEG; st.side *= -1; }
+  const err = st.side * AMP - st.psi;
+  st.w += (KP * err - KD * st.w) * dt;
+  st.psi += st.w * dt;
+  const vT = VMAX - (VMAX - VMIN) * Math.min(1, Math.abs(st.w) / 3.5);
+  st.v += (vT - st.v) * Math.min(1, dt * 4.5);
+  st.phi += (st.psi - st.phi) * Math.min(1, dt * GRIP);
 }
 
-// cursor pull (landing/ending): the zig-zag keeps its swing, but its centre leans a little toward the mouse
-// on the floor. sin() of the relative angle: no pull when the cursor is straight ahead or straight behind,
-// most when it is off to a side, and no flip anywhere. Mouse/pen only; it fades with the zig-zag itself.
-const pull = { ndc: new THREE.Vector2(), on: false, bias: 0 };
-const PULL = 0.35;
+// lane (landing and ending): Rebot keeps its zig-zag, and the cursor steers where it does it, inside a
+// small lane on the floor around its home spot. The cursor's floor point, clamped to the lane, is the
+// target of a soft, speed-capped spring; over the copy, with no mouse, or during a page change, the target
+// is home. Mouse/pen only. The offset is weighted by the zig-zag amount, so the showcases are untouched.
+const lane = { ndc: new THREE.Vector2(), on: false, cx: 0, x: 0, z: 0, vx: 0, vz: 0, span: null };
+const LANE_W = 0.2, LANE_D = 0.06; // half width (fraction of the half-screen), half depth (m, at scale 1)
 addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return;
-  pull.on = true; pull.ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  lane.on = true; lane.cx = e.clientX; lane.ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
 });
-document.documentElement.addEventListener('pointerleave', () => { pull.on = false; });
-const ray = new THREE.Raycaster(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
-function pullStep(dt) {
-  let target = 0;
-  if (pull.on && S.cyc > 0.01) {
-    ray.setFromCamera(pull.ndc, camera);
-    floor.constant = -ground.position.y;
-    const r = ray.ray, onFloor = r.intersectPlane(floor, hit);
-    const dx = onFloor ? hit.x - root.position.x : r.direction.x, dz = onFloor ? hit.z - root.position.z : r.direction.z;
-    target = PULL * Math.sin(Math.atan2(-dz, dx) - S.yaw) * S.cyc;
+document.documentElement.addEventListener('pointerleave', () => { lane.on = false; });
+addEventListener('resize', () => { lane.span = null; });
+const ray = new THREE.Raycaster(), floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3(), ndc = new THREE.Vector2();
+function floorAt(nx, ny) { ray.setFromCamera(ndc.set(nx, ny), camera); floor.constant = -ground.position.y; return ray.ray.intersectPlane(floor, hit); }
+// horizontal span of the page's copy, cached (the panels only ever move vertically)
+function copySpan() {
+  if (!lane.span) lane.span = {};
+  if (!lane.span[page]) { const r = document.getElementById(page === 0 ? 'p1' : 'p5').getBoundingClientRect(); lane.span[page] = [r.left - 16, r.right + 16]; }
+  return lane.span[page];
+}
+const laneHalfW = () => LANE_W * halfH * camera.aspect;
+// a click on the ending drops boxes just below the screen's bottom edge, and the floor carries them in.
+// The floor sways with the zig-zag, so a copy of the drive sim is run ahead to find where they would drift:
+// they are placed so that they reach Rebot's line in line with the click (clamped to the lane), which is
+// also where the cursor steers Rebot.
+function spawnBoxes(cx, cy) {
+  const L = layout();
+  if (!floorAt((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1)) return;
+  const W = laneHalfW(), x = L.x + Math.max(-W, Math.min(W, hit.x - L.x));
+  if (!floorAt(0, -1)) return;
+  const z = hit.z + 0.12 * L.sc, meet = lane.z + 0.1 * L.sc, st = { ...sim }, dt = 1 / 60;
+  let dx = 0, dz = 0;
+  for (let i = 0; i < 360 && z + dz > meet; i++) {
+    simStep(dt, st);
+    const tr = S.yaw + st.phi;
+    dx -= Math.cos(tr) * st.v * dt; dz += Math.sin(tr) * st.v * dt;
   }
-  pull.bias += (target - pull.bias) * Math.min(1, dt * 2);
+  boxes.spawn(x - dx, z, ground.position.y, L.sc);
+}
+function laneStep(dt, L) {
+  let tx = 0, tz = 0;
+  if (lane.on && !busy && (page === 0 || page === 4)) {
+    const sp = copySpan();
+    if ((lane.cx < sp[0] || lane.cx > sp[1]) && floorAt(lane.ndc.x, lane.ndc.y)) {
+      const W = laneHalfW(), D = LANE_D * L.sc;
+      tx = Math.max(-W, Math.min(W, hit.x - L.x)); tz = Math.max(-D, Math.min(D, hit.z));
+    }
+  }
+  const w = 3.2, cap = 0.3 * L.sc;
+  lane.vx += (w * w * (tx - lane.x) - 2 * w * lane.vx) * dt;
+  lane.vz += (w * w * (tz - lane.z) - 2 * w * lane.vz) * dt;
+  const v = Math.hypot(lane.vx, lane.vz);
+  if (v > cap) { lane.vx *= cap / v; lane.vz *= cap / v; }
+  lane.x += lane.vx * dt; lane.z += lane.vz * dt;
 }
 
 // showcase turntable: runs on its own while a drive/structure page is up, then settles back to its home angle
@@ -361,14 +399,15 @@ function layout() {
 function frame(now, draw = true) {
   const dt = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
   const run = REDUCED ? 0 : 1;
-  if (run) { pullStep(dt); simStep(dt); turnStep(dt); }
+  if (run) { simStep(dt); turnStep(dt); }
   perfStep(dt);
   const L = layout();
+  if (run) laneStep(dt, L);
 
   // timeline pose plus the zig-zag
   const cyc = S.cyc * run;
   const yawTot = S.yaw + cyc * sim.psi + turn.a;
-  const px = L.x, pz = 0;
+  const px = L.x + lane.x * cyc, pz = lane.z * cyc;
   root.rotation.y = yawTot;
   root.scale.setScalar(L.sc);
   root.position.set(px, L.y, pz);
@@ -380,6 +419,7 @@ function frame(now, draw = true) {
   if (!prev.init) { Object.assign(prev, { x: px, z: pz, yaw: yawTot, init: true }); }
   const vRig = ((px - prev.x) * fx + (pz - prev.z) * fz) / Math.max(dt, 1e-4) / L.sc;
   const yawRate = wrap(yawTot - prev.yaw) / Math.max(dt, 1e-4);
+  const rvx = (px - prev.x) / Math.max(dt, 1e-4), rvz = (pz - prev.z) / Math.max(dt, 1e-4);
   Object.assign(prev, { x: px, z: pz, yaw: yawTot });
   const vBody = vRig + cyc * sim.v;
 
@@ -387,6 +427,14 @@ function frame(now, draw = true) {
   const travel = S.yaw + sim.phi, gs = cyc * sim.v * dt;
   gOff.x -= Math.cos(travel) * gs; gOff.y += Math.sin(travel) * gs;
   gOff.y += 0.03 * S.gf * dt * run; // slow drift on the floating floor
+  if (boxes.count) {
+    const hits = boxes.step(dt, {
+      px, py: L.y, pz, yaw: yawTot, yawRate, sc: L.sc, focus: S.focus, vx: rvx, vz: rvz,
+      spin: sm.ww, floorY: ground.position.y, vG: [-Math.cos(travel) * cyc * sim.v, Math.sin(travel) * cyc * sim.v], home: L.x,
+    });
+    // each blade hit kicks the robot a little (the reaction's torque about its centre) and costs the blade speed
+    for (const h of hits) { turn.w += 6 * (h.lx * h.tz - h.lz * h.tx); sm.ww *= 0.6; }
+  }
 
   // wheel rates (rad/s about +Y CAD); right wheel is the CAD -Y side
   const clampR = (x) => Math.max(-40, Math.min(40, x));
@@ -684,6 +732,7 @@ function goto(n) {
   if (busy) { pending = n; return; }
   if (n === page) return;
   const from = page;
+  if (from === 4) boxes.clear();
   page = n; busy = true; updateRot(); setRail(n);
   history.replaceState(null, '', n ? `#${NAMES[n]}` : location.pathname + location.search);
   const done = () => {
@@ -698,6 +747,7 @@ function goto(n) {
 
 // direct jump (deep links and screenshots)
 function jump(n) {
+  boxes.clear();
   page = n; setRail(n); tl.seek(PAGES[n], false); updateRot();
   gsap.set('#p1', { opacity: n === 0 ? 1 : 0 });
 }
@@ -730,6 +780,7 @@ function inputs() {
   }, { passive: true });
   addEventListener('click', (e) => {
     if (e.target.closest('.rail, .brand')) return;
+    if (page === 4 && !busy && pending === null) { if (!REDUCED) spawnBoxes(e.clientX, e.clientY); return; } // the last page: play
     goto((pending ?? page) + 1);
   });
   links.forEach((a, i) => a.addEventListener('click', (e) => { e.preventDefault(); goto(i); }));
