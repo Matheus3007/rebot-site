@@ -136,8 +136,8 @@ const ground = new THREE.Mesh(new THREE.PlaneGeometry(7, 7), groundMat);
 ground.rotation.x = -Math.PI / 2; ground.renderOrder = -2; scene.add(ground);
 // ending minigame boxes (src/boxes.js): drawn with the grid's colours, through the same lookup under post
 const boxes = createBoxes({ lut: groundMat.uniforms.uLut.value, lutN: LUT_N, bgD: TONE.uBgD.value });
-scene.add(boxes.mesh);
-if (CAPTURE) window.__boxes = boxes;
+scene.add(boxes.group);
+if (CAPTURE) Object.assign(window, { __boxes: boxes });
 
 // soft contact shadow (child of model, CAD frame)
 const blobTex = (() => {
@@ -309,12 +309,14 @@ function simStep(dt, st = sim) {
   st.phi += (st.psi - st.phi) * Math.min(1, dt * GRIP);
 }
 
-// lane (landing and ending): Rebot keeps its zig-zag, and the cursor steers where it does it, inside a
-// small lane on the floor around its home spot. The cursor's floor point, clamped to the lane, is the
-// target of a soft, speed-capped spring; over the copy, with no mouse, or during a page change, the target
-// is home. Mouse/pen only. The offset is weighted by the zig-zag amount, so the showcases are untouched.
-const lane = { ndc: new THREE.Vector2(), on: false, cx: 0, x: 0, z: 0, vx: 0, vz: 0, span: null };
-const LANE_W = 0.2, LANE_D = 0.06; // half width (fraction of the half-screen), half depth (m, at scale 1)
+// lane (landing and ending): Rebot keeps its zig-zag, and the cursor steers it across a small lane on the
+// floor. Steering is a heading offset on top of the zig-zag, and the sideways motion comes from that heading:
+// the floor keeps taking the zig-zag's own sway and the forward drive, and only the steered part of the
+// travel moves the robot over it. The target is the cursor's floor point across the lane; over the copy,
+// with no mouse, or during a page change it is home. Mouse/pen only; weighted by the zig-zag amount, so
+// the showcases are untouched.
+const lane = { ndc: new THREE.Vector2(), on: false, cx: 0, x: 0, d: 0, knock: 0, span: null };
+const LANE_W = 0.2; // half width, as a fraction of the half-screen
 addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') return;
   lane.on = true; lane.cx = e.clientX; lane.ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
@@ -330,40 +332,50 @@ function copySpan() {
   return lane.span[page];
 }
 const laneHalfW = () => LANE_W * halfH * camera.aspect;
-// a click on the ending drops boxes just below the screen's bottom edge, and the floor carries them in.
-// The floor sways with the zig-zag, so a copy of the drive sim is run ahead to find where they would drift:
-// they are placed so that they reach Rebot's line in line with the click (clamped to the lane), which is
-// also where the cursor steers Rebot.
-function spawnBoxes(cx, cy) {
-  const L = layout();
-  if (!floorAt((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1)) return;
-  const W = laneHalfW(), x = L.x + Math.max(-W, Math.min(W, hit.x - L.x));
-  if (!floorAt(0, -1)) return;
-  const z = hit.z + 0.12 * L.sc, meet = lane.z + 0.1 * L.sc, st = { ...sim }, dt = 1 / 60;
-  let dx = 0, dz = 0;
-  for (let i = 0; i < 360 && z + dz > meet; i++) {
-    simStep(dt, st);
-    const tr = S.yaw + st.phi;
-    dx -= Math.cos(tr) * st.v * dt; dz += Math.sin(tr) * st.v * dt;
-  }
-  boxes.spawn(x - dx, z, ground.position.y, L.sc);
-}
+const clampW = (x) => { const W = laneHalfW(); return Math.max(-W, Math.min(W, x)); };
 function laneStep(dt, L) {
-  let tx = 0, tz = 0;
+  let tx = 0;
   if (lane.on && !busy && (page === 0 || page === 4)) {
     const sp = copySpan();
-    if ((lane.cx < sp[0] || lane.cx > sp[1]) && floorAt(lane.ndc.x, lane.ndc.y)) {
-      const W = laneHalfW(), D = LANE_D * L.sc;
-      tx = Math.max(-W, Math.min(W, hit.x - L.x)); tz = Math.max(-D, Math.min(D, hit.z));
-    }
+    if ((lane.cx < sp[0] || lane.cx > sp[1]) && floorAt(lane.ndc.x, lane.ndc.y)) tx = clampW(hit.x - L.x);
   }
-  const w = 3.2, cap = 0.3 * L.sc;
-  lane.vx += (w * w * (tx - lane.x) - 2 * w * lane.vx) * dt;
-  lane.vz += (w * w * (tz - lane.z) - 2 * w * lane.vz) * dt;
-  const v = Math.hypot(lane.vx, lane.vz);
-  if (v > cap) { lane.vx *= cap / v; lane.vz *= cap / v; }
-  lane.x += lane.vx * dt; lane.z += lane.vz * dt;
+  // the sideways speed wanted, as a heading offset (eased: the robot turns into it, and out of it)
+  const vWant = Math.max(-0.22, Math.min(0.22, 2.2 * (tx - lane.x)));
+  const dWant = Math.max(-0.55, Math.min(0.55, vWant / Math.max(sim.v, 0.1)));
+  lane.d += (dWant - lane.d) * Math.min(1, dt * 4);
+  lane.knock *= Math.exp(-5 * dt);
 }
+// a click on the ending drops one box just below the screen, on the floor spot Rebot will drive over: a copy
+// of the drive sim runs ahead (the floor sways with the zig-zag) to find where Rebot's front will be when the
+// floor has carried the box to it, with Rebot at the mouse's place across the lane. Among the next 0.7 s
+// of arrival times it takes the one that puts the box closest to under the mouse.
+function spawnBox(cx, cy) {
+  const L = layout();
+  if (!floorAt((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1)) return;
+  const tx = clampW(hit.x - L.x);
+  if (!floorAt(0, -1)) return;
+  const zMin = hit.z + 0.075 * L.sc, reach = 0.12 * L.sc, st = { ...sim }, dt = 1 / 60;
+  let Dx = 0, Dz = 0, first = -1, best = null;
+  for (let i = 1; i <= 240; i++) {
+    simStep(dt, st);
+    Dx -= Math.cos(S.yaw + st.phi) * st.v * dt; Dz += Math.sin(S.yaw + st.phi + lane.d) * st.v * dt;
+    const th = S.yaw + st.psi + lane.d, bx = tx + Math.cos(th) * reach - Dx, bz = -Math.sin(th) * reach - Dz;
+    if (bz < zMin) continue; // it would start on screen
+    const t = i * dt;
+    if (first < 0) first = t;
+    if (t > first + 0.7) break;
+    const cost = Math.abs(bx - tx) + 0.15 * (t - first);
+    if (!best || cost < best.cost) best = { cost, bx, bz };
+  }
+  if (!best) best = { bx: tx, bz: zMin };
+  const lim = 0.2 * L.sc;
+  boxes.spawn(L.x + tx + Math.max(-lim, Math.min(lim, best.bx - tx)), best.bz, ground.position.y, L.sc);
+}
+
+// hit feedback: a moment of hit-stop, a short camera shake, and a hop
+const jolt = { stop: 0, ts: 1, shake: 0, hopY: 0, hopV: 0 };
+const CAM = camera.position.clone();
+if (CAPTURE) Object.assign(window, { __lane: lane, __jolt: jolt });
 
 // showcase turntable: runs on its own while a drive/structure page is up, then settles back to its home angle
 const turn = { a: 0, w: 0 };
@@ -397,20 +409,31 @@ function layout() {
 }
 
 function frame(now, draw = true) {
-  const dt = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
+  const raw = Math.min(0.05, (now - clock.last) / 1000 || 0.016); clock.last = now;
+  if (jolt.stop > 0) { jolt.stop -= raw; jolt.ts = 0.05; } else if (jolt.ts < 1) jolt.ts = Math.min(1, jolt.ts + raw * 7);
+  const dt = raw * jolt.ts; // hit-stop: the sim runs slow for a moment after a blade hit
   const run = REDUCED ? 0 : 1;
   if (run) { simStep(dt); turnStep(dt); }
-  perfStep(dt);
+  perfStep(raw);
   const L = layout();
   if (run) laneStep(dt, L);
 
   // timeline pose plus the zig-zag
   const cyc = S.cyc * run;
-  const yawTot = S.yaw + cyc * sim.psi + turn.a;
-  const px = L.x + lane.x * cyc, pz = lane.z * cyc;
+  const yawTot = S.yaw + cyc * (sim.psi + lane.d) + turn.a;
+  // steering: the steered part of the travel (sideways) moves the robot; the knock from a hit skids it
+  let steerDx = 0;
+  if (run) {
+    const x0 = lane.x, vs = sim.v * (Math.cos(S.yaw + sim.phi + lane.d) - Math.cos(S.yaw + sim.phi));
+    lane.x = clampW(lane.x + (vs + lane.knock) * dt);
+    steerDx = lane.x - x0 - lane.knock * dt;
+    jolt.hopY += jolt.hopV * dt; jolt.hopV -= 9.81 * dt;
+    if (jolt.hopY <= 0) jolt.hopY = jolt.hopV = 0;
+  }
+  const px = L.x + lane.x * cyc, pz = 0;
   root.rotation.y = yawTot;
   root.scale.setScalar(L.sc);
-  root.position.set(px, L.y, pz);
+  root.position.set(px, L.y + jolt.hopY * L.sc, pz);
   const f = S.focus;
   model.position.set(-f[0] * 0.001, -f[2] * 0.001, f[1] * 0.001);
 
@@ -424,16 +447,21 @@ function frame(now, draw = true) {
   const vBody = vRig + cyc * sim.v;
 
   // the ground slides against the travel direction (which lags the heading: drift)
-  const travel = S.yaw + sim.phi, gs = cyc * sim.v * dt;
-  gOff.x -= Math.cos(travel) * gs; gOff.y += Math.sin(travel) * gs;
+  const travel = S.yaw + sim.phi + cyc * lane.d, gs = cyc * sim.v * dt;
+  const g0x = gOff.x, g0y = gOff.y;
+  gOff.x -= Math.cos(travel) * gs - steerDx * cyc; gOff.y += Math.sin(travel) * gs;
   gOff.y += 0.03 * S.gf * dt * run; // slow drift on the floating floor
   if (boxes.count) {
     const hits = boxes.step(dt, {
       px, py: L.y, pz, yaw: yawTot, yawRate, sc: L.sc, focus: S.focus, vx: rvx, vz: rvz,
-      spin: sm.ww, floorY: ground.position.y, vG: [-Math.cos(travel) * cyc * sim.v, Math.sin(travel) * cyc * sim.v], home: L.x,
+      spin: sm.ww, floorY: ground.position.y, vG: [(gOff.x - g0x) / Math.max(dt, 1e-4), (gOff.y - g0y) / Math.max(dt, 1e-4)], home: L.x,
     });
-    // each blade hit kicks the robot a little (the reaction's torque about its centre) and costs the blade speed
-    for (const h of hits) { turn.w += 6 * (h.lx * h.tz - h.lz * h.tx); sm.ww *= 0.6; }
+    // a blade hit: the reaction's torque turns the robot, it skids away from the throw and hops, the blade
+    // loses most of its speed, and the whole thing stops for a beat and shakes
+    for (const h of hits) {
+      turn.w += 14 * (h.lx * h.tz - h.lz * h.tx); lane.knock -= h.kx * 0.35; sm.ww *= 0.35;
+      jolt.stop = 0.075; jolt.shake = Math.min(0.007, jolt.shake + 0.0045); jolt.hopV = Math.max(jolt.hopV, 0.3);
+    }
   }
 
   // wheel rates (rad/s about +Y CAD); right wheel is the CAD -Y side
@@ -482,6 +510,12 @@ function frame(now, draw = true) {
   ground.visible = S.g > 0.01;
   blob.material.opacity = S.show.all * (1 - S.gf); blob.visible = blob.material.opacity > 0.01;
 
+  if (jolt.shake > 1e-5) {
+    camera.position.set(CAM.x + (Math.random() - 0.5) * 2 * jolt.shake, CAM.y + (Math.random() - 0.5) * 2 * jolt.shake, CAM.z);
+    jolt.shake *= Math.exp(-raw * 16);
+    if (jolt.shake <= 1e-5) { jolt.shake = 0; camera.position.copy(CAM); }
+  }
+
   if (!draw) return;
   if (composer) { grain.uniforms.uTime.value += dt * run; composer.render(dt); } // reduced motion: static grain
   else renderer.render(scene, camera);
@@ -522,7 +556,7 @@ if (FX) {
   gtao.setSize = (w, h) => setAO(Math.max(1, Math.round(w * AO_RES)), Math.max(1, Math.round(h * AO_RES)));
   const hide = gtao.overrideVisibility.bind(gtao);
   const show = gtao.restoreVisibility.bind(gtao);
-  gtao.overrideVisibility = () => { hide(); scene.background = null; scene.traverse((o) => { if (o.isMesh && o.material.depthWrite === false) o.visible = false; }); };
+  gtao.overrideVisibility = () => { hide(); scene.background = null; scene.traverse((o) => { if ((o.isMesh || o.isLine) && o.material.depthWrite === false) o.visible = false; }); };
   gtao.restoreVisibility = () => { show(); scene.background = bgColor; };
   composer.addPass(gtao);
   grain = new ShaderPass(FinalShader);
@@ -780,7 +814,7 @@ function inputs() {
   }, { passive: true });
   addEventListener('click', (e) => {
     if (e.target.closest('.rail, .brand')) return;
-    if (page === 4 && !busy && pending === null) { if (!REDUCED) spawnBoxes(e.clientX, e.clientY); return; } // the last page: play
+    if (page === 4 && !busy && pending === null) { if (!REDUCED) spawnBox(e.clientX, e.clientY); return; } // the last page: play
     goto((pending ?? page) + 1);
   });
   links.forEach((a, i) => a.addEventListener('click', (e) => { e.preventDefault(); goto(i); }));
