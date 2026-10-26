@@ -706,8 +706,9 @@ function buildTimeline() {
 // ---------------------------------------------------------------- pages
 // note: seeks pass suppressEvents=false so the focus proxies' onUpdate still runs
 let page = 0, busy = false, pending = null;
-const links = [...document.querySelectorAll('.rail a')];
-const setRail = (n) => links.forEach((a, i) => a.classList.toggle('on', i === n));
+const links = [...document.querySelectorAll('.rail a')], brand = document.querySelector('.brand');
+// the header wordmark stays off the landing, where the hero already shows it
+const setRail = (n) => { links.forEach((a, i) => a.classList.toggle('on', i === n)); brand.classList.toggle('off', n === 0); };
 const p1 = (show) => gsap.to('#p1', { opacity: show ? 1 : 0, y: show ? 0 : -30, duration: show ? 0.7 : 0.45, ease: show ? 'power2.out' : 'power2.in', overwrite: true });
 const updateRot = () => { S.rot = !busy && (page === 1 || page === 3) ? 1 : 0; };
 

@@ -20,7 +20,8 @@ body { cursor: default; user-select: none; -webkit-user-select: none; touch-acti
 .top { position: fixed; z-index: 10; inset: 0 0 auto 0; height: 64px; padding: 0 var(--gut); display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
 /* the wordmark (public/brand): letters fill its bottom 40%, the mark rises on the right */
 .wm { display: block; width: auto; max-width: none; }
-.brand { pointer-events: auto; display: block; }
+.brand { pointer-events: auto; display: block; transition: opacity .45s, visibility .45s; }
+.brand.off { opacity: 0; visibility: hidden; }
 .brand .wm { height: 30px; transform: translateY(-8px); } /* letters on the rail's baseline */
 .rail { pointer-events: auto; display: flex; gap: 6px; }
 .rail a { font: 600 12px/1 var(--cond); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); text-decoration: none; padding: 10px 12px; border-bottom: 1px solid transparent; transition: color .3s, border-color .3s; display: flex; gap: 8px; }
@@ -40,7 +41,6 @@ body { cursor: default; user-select: none; -webkit-user-select: none; touch-acti
 h1, h2 { margin: 0 0 22px; font-family: var(--cond); font-weight: 800; text-transform: uppercase; line-height: .9; letter-spacing: -.005em; }
 h1 { font-size: clamp(76px, 12vw, 190px); }
 h1 .wm { width: min(100%, 31rem); height: auto; margin: 0 0 4px; }
-.eyebrow .wm { height: 22px; transform: translateY(-5px); }
 h2 { font-size: clamp(44px, 6vw, 92px); }
 h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
 .lead { margin: 0 0 16px; font-size: clamp(18px, 1.55vw, 23px); line-height: 1.38; color: var(--text); font-weight: 500; }
