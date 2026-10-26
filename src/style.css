@@ -1,7 +1,7 @@
 :root {
   --bg: #07080a; --panel: #0f1114; --line: rgba(255,255,255,.1); --line-2: rgba(255,255,255,.18);
   --text: #f3f4f6; --text-2: #b9c0c9; --muted: #7d8692;
-  --red: #e5161c; --red-2: #ff4a4f; --red-soft: rgba(229,22,28,.14);
+  --red: #e60000; --red-2: #ff4a4f; --red-soft: rgba(230,0,0,.14);
   --cond: "Barlow Condensed", "Barlow", system-ui, sans-serif;
   --font: "Barlow", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
@@ -18,8 +18,10 @@ body { cursor: default; user-select: none; -webkit-user-select: none; touch-acti
   background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0,0,0,.55) 100%); }
 
 .top { position: fixed; z-index: 10; inset: 0 0 auto 0; height: 64px; padding: 0 var(--gut); display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
-.brand { pointer-events: auto; font: 800 18px/1 var(--cond); letter-spacing: .28em; color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 12px; }
-.brand .dot { width: 9px; height: 9px; background: var(--red); border-radius: 50%; box-shadow: 0 0 14px var(--red); }
+/* the wordmark (public/brand): letters fill its bottom 40%, the mark rises on the right */
+.wm { display: block; width: auto; max-width: none; }
+.brand { pointer-events: auto; display: block; }
+.brand .wm { height: 30px; transform: translateY(-8px); } /* letters on the rail's baseline */
 .rail { pointer-events: auto; display: flex; gap: 6px; }
 .rail a { font: 600 12px/1 var(--cond); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); text-decoration: none; padding: 10px 12px; border-bottom: 1px solid transparent; transition: color .3s, border-color .3s; display: flex; gap: 8px; }
 .rail a i { font: 500 10px/1.3 var(--mono); font-style: normal; opacity: .6; }
@@ -37,12 +39,15 @@ body { cursor: default; user-select: none; -webkit-user-select: none; touch-acti
 .eyebrow::before { content: ""; width: 28px; height: 2px; background: var(--red); }
 h1, h2 { margin: 0 0 22px; font-family: var(--cond); font-weight: 800; text-transform: uppercase; line-height: .9; letter-spacing: -.005em; }
 h1 { font-size: clamp(76px, 12vw, 190px); }
+h1 .wm { width: min(100%, 31rem); height: auto; margin: 0 0 4px; }
+.eyebrow .wm { height: 22px; transform: translateY(-5px); }
 h2 { font-size: clamp(44px, 6vw, 92px); }
 h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
 .lead { margin: 0 0 16px; font-size: clamp(18px, 1.55vw, 23px); line-height: 1.38; color: var(--text); font-weight: 500; }
 .panel p:not(.lead):not(.eyebrow):not(.hint):not(.sub):not(.foot) { margin: 0 0 14px; color: var(--text-2); font-size: clamp(15px, 1.2vw, 17px); }
 .sub { margin: 4px 0 28px; font: 600 clamp(22px, 2.4vw, 34px)/1.1 var(--cond); letter-spacing: .06em; text-transform: uppercase; color: var(--red-2); }
-.foot { margin: 0; font: 500 12px/1 var(--mono); color: var(--muted); letter-spacing: .06em; }
+.foot { margin: 0; font: 500 12px/1 var(--mono); color: var(--muted); letter-spacing: .06em; display: flex; align-items: center; gap: 10px; }
+.foot .mk { width: 20px; height: 20px; }
 .figs { list-style: none; margin: 28px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0; border-top: 1px solid var(--line-2); }
 .figs li { flex: 1 1 8rem; padding: 14px 18px 0 0; display: flex; flex-direction: column; gap: 4px; }
 .figs b { font: 700 clamp(22px, 2.2vw, 32px)/1 var(--cond); letter-spacing: .02em; color: var(--text); white-space: nowrap; }
@@ -54,7 +59,7 @@ h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
 
 #loader { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-content: center; gap: 18px; justify-items: center; transition: opacity .8s ease, visibility .8s; }
 #loader.done { opacity: 0; visibility: hidden; }
-.lw { font: 800 28px/1 var(--cond); letter-spacing: .5em; padding-left: .5em; }
+.lw { width: 200px; height: auto; }
 .lb { width: 160px; height: 2px; background: var(--line); }
 .lb i { display: block; height: 100%; width: 0; background: var(--red); transition: width .2s; }
 
@@ -66,7 +71,7 @@ h2.big { font-size: clamp(44px, 6.4vw, 104px); line-height: .94; }
     background: linear-gradient(transparent, rgba(7,8,10,.82) 38%, rgba(7,8,10,.94)); margin: 0 calc(-1 * var(--gut)); padding-left: var(--gut); padding-right: var(--gut); }
   #p1 { transform: none; }
   .panel .eyebrow { margin-bottom: 10px; }
-  h1 { font-size: 22vw; margin-bottom: 10px; } h2 { font-size: 12vw; margin-bottom: 10px; } h2.big { font-size: 11.5vw; }
+  h1 { font-size: 22vw; margin-bottom: 10px; } h1 .wm { width: 72vw; } h2 { font-size: 12vw; margin-bottom: 10px; } h2.big { font-size: 11.5vw; }
   .lead { font-size: 16px; margin-bottom: 8px; }
   .panel p:not(.lead):not(.eyebrow):not(.hint):not(.sub):not(.foot) { font-size: 13.5px; margin-bottom: 8px; }
   .figs { margin-top: 12px; } .figs li { padding-top: 10px; flex-basis: 6rem; } .figs b { font-size: 19px; }
